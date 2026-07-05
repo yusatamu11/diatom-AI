@@ -6,6 +6,7 @@ import torchvision.transforms.functional as F
 from PIL import Image
 
 from models.maskrcnn import get_model
+from utils.visualize import save_visualization
 
 
 NUM_CLASSES = 20
@@ -48,6 +49,12 @@ def get_args():
         "--save_image",
         action="store_true",
         help="Save visualization image",
+    )#この引数を持ったら　args.save_image=True　となる
+    
+    parser.add_argument(
+        "--show_masks",
+        action="store_true",
+        help="Overlay masks on visualization",
     )
 
     return parser.parse_args()
@@ -102,7 +109,15 @@ def main():
     print(f"Saved prediction: {args.output}")
     
     if args.save_image:
-        print("Visualization is not implemented yet.")
+        save_visualization(
+            image=image,
+            boxes=boxes.detach().cpu(),
+            labels=labels.detach().cpu(),
+            scores=scores.detach().cpu(),
+            masks=masks.detach().cpu(),
+            output_path=args.output.replace(".pt", ".jpg"),
+            show_masks=args.show_masks,
+        )
 
     print("Detections:", len(scores))
     print("Boxes:", boxes.shape)
