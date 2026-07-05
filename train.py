@@ -1,4 +1,6 @@
 import os
+import argparse
+
 
 import torch
 from torch.utils.data import DataLoader
@@ -8,20 +10,55 @@ from utils.dataset import CocoDiatomDataset
 
 
 NUM_CLASSES = 20
-TRAIN_IMAGE_DIR = "dataset/train/images"
-TRAIN_ANN_FILE = "dataset/train/annotations.json"
 
-NUM_EPOCHS = 3
-BATCH_SIZE = 2
-LEARNING_RATE = 0.005
 OUTPUT_DIR = "runs"
 
 
 def collate_fn(batch):
     return tuple(zip(*batch))
 
+def get_args():
+    parser = argparse.ArgumentParser()#インスタンス(オブジェクト)を作成
+    
+    parser.add_argument(
+        "--image_dir",
+        type=str,
+        required=True,
+        help="Training image directory",
+    )
+        
+    parser.add_argument(
+        "--ann_file",
+        type=str,
+        required=True,
+        help="COCO annotation file for training",
+    )
+    
+    parser.add_argument(
+        "--epochs",
+        type=int,
+        default=3,
+    )
+    
+    parser.add_argument(
+        "--batch_size",
+        type=int,
+        default=2,
+    )
+    
+    parser.add_argument(
+        "--lr",
+        type=float,
+        default=0.005,
+    )
+    
+    
+    return parser.parse_args()
+
 
 def main():
+    args = get_args()
+    
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -29,14 +66,14 @@ def main():
 
     # Dataset
     train_dataset = CocoDiatomDataset(
-        TRAIN_IMAGE_DIR,
-        TRAIN_ANN_FILE,
+        args.image_dir,
+        args.ann_file,
     )
 
     # DataLoader for training
     train_loader = DataLoader(
         train_dataset,
-        batch_size=BATCH_SIZE,
+        batch_size=args.batch_size,
         shuffle=True,
         num_workers=2,
         collate_fn=collate_fn,
@@ -49,14 +86,14 @@ def main():
     # Optimizer
     optimizer = torch.optim.SGD(
         model.parameters(),
-        lr=LEARNING_RATE,
+        lr=args.lr,
         momentum=0.9,
         weight_decay=0.0005,
     )
     
     
     # Training
-    for epoch in range(NUM_EPOCHS):
+    for epoch in range(args.epochs):
         model.train()
         epoch_loss = 0.0
 
@@ -77,7 +114,7 @@ def main():
             epoch_loss += losses.item()
 
         avg_loss = epoch_loss / len(train_loader)
-        print(f"Epoch [{epoch + 1}/{NUM_EPOCHS}], loss: {avg_loss:.4f}")
+        print(f"Epoch [{epoch + 1}/{args.epochs}], loss: {avg_loss:.4f}")
 
         save_path = os.path.join(
             OUTPUT_DIR,
