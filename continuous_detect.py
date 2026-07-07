@@ -1,3 +1,13 @@
+"""
+continuous_detect.py
+
+Batch inference script for Mask R-CNN.
+
+This script performs inference on all images in a directory,
+optionally saves visualization images,
+and archives prediction results.
+"""
+
 import argparse
 import os
 

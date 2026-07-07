@@ -1,3 +1,14 @@
+"""
+detect.py
+
+Run inference on a single image using a trained Mask R-CNN model.
+
+This script loads a trained model,
+performs instance segmentation,
+saves prediction results,
+and optionally saves visualization images.
+"""
+
 import argparse
 import os
 
