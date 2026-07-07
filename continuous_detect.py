@@ -7,6 +7,7 @@ from PIL import Image
 
 from models.maskrcnn import get_model
 from utils.visualize import save_visualization
+from utils.archive import archive_directory
 
 from pathlib import Path #detect.pyと違う．一気に画像を取得可能
 
@@ -55,6 +56,14 @@ def get_args():
         "--show_masks",
         action="store_true",
         help="Overlay masks on visualization",
+    )
+    
+    parser.add_argument(
+        "--archive",
+        type=str,
+        choices=["none", "zip", "tar", "tar.zst"],
+        default="none",
+        help="Archive prediction results",
     )
     
     return parser.parse_args()
@@ -131,6 +140,12 @@ def main():
                 output_path=output_path.with_suffix(".jpg"),#with_suffixで拡張子を変更できる
                 show_masks=args.show_masks,
             )
+            
+    if args.archive != "none":
+        archive_directory(
+            args.output_dir,
+            archive_type=args.archive,
+        )
             
 if __name__ == "__main__":
     main()
