@@ -1,3 +1,15 @@
+"""
+visualize.py
+
+Visualization utilities for Mask R-CNN predictions.
+
+This module provides helper functions to:
+- draw bounding boxes
+- overlay segmentation masks
+- display class labels and confidence scores
+- save visualization images
+"""
+
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 

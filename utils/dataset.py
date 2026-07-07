@@ -1,3 +1,15 @@
+"""
+dataset.py
+
+Dataset utilities for training Mask R-CNN.
+
+This module provides a custom PyTorch Dataset for:
+- loading microscopy images
+- loading LabelMe annotations
+- converting annotations into Mask R-CNN targets
+- preparing training and validation samples
+"""
+
 import os
 
 import numpy as np

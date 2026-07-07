@@ -1,3 +1,14 @@
+"""
+archive.py
+
+Archive utilities for prediction results.
+
+This module provides helper functions to:
+- compress prediction directories into ZIP archives
+- create TAR archives
+- create TAR.ZST archives for efficient storage and transfer
+"""
+
 import shutil #ファイルやディレクトリのコピー、削除、移動，圧縮などを行うためのモジュール
 from pathlib import Path
 import subprocess
