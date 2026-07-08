@@ -64,13 +64,28 @@ class CocoDiatomDataset(Dataset):
             areas.append(ann["area"])
             iscrowd.append(ann.get("iscrowd", 0))
             
+        if len(boxes) == 0:
+            _, height, width = image.shape
+
+            boxes = torch.zeros((0, 4), dtype=torch.float32)
+            labels = torch.zeros((0,), dtype=torch.int64)
+            masks = torch.zeros((0, height, width), dtype=torch.uint8)
+            areas = torch.zeros((0,), dtype=torch.float32)
+            iscrowd = torch.zeros((0,), dtype=torch.int64)
+        else:
+            boxes = torch.as_tensor(boxes, dtype=torch.float32)
+            labels = torch.as_tensor(labels, dtype=torch.int64)
+            masks = torch.as_tensor(np.array(masks), dtype=torch.uint8)
+            areas = torch.as_tensor(areas, dtype=torch.float32)
+            iscrowd = torch.as_tensor(iscrowd, dtype=torch.int64)
+
         target = {
-            "boxes": torch.as_tensor(boxes, dtype=torch.float32),
-            "labels": torch.as_tensor(labels, dtype=torch.int64),
-            "masks": torch.as_tensor(np.array(masks), dtype=torch.uint8),
+            "boxes": boxes,
+            "labels": labels,
+            "masks": masks,
             "image_id": torch.tensor([image_id]),
-            "area": torch.as_tensor(areas, dtype=torch.float32),
-            "iscrowd": torch.as_tensor(iscrowd, dtype=torch.int64)
+            "area": areas,
+            "iscrowd": iscrowd,
         }
         
         return image, target
