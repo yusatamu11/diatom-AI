@@ -59,6 +59,13 @@ def get_args():
         default=0.5,
         help="IoU threshold for duplicate removal",
     )
+    
+    parser.add_argument(
+        "--mask_thresh",
+        type=float,
+        default=0.5,
+        help="Threshold used to binarize predicted masks",
+    )
 
     return parser.parse_args()
 
@@ -130,6 +137,34 @@ def is_in_overlap_region(
     )
 
     return in_overlap#中心がオーバーラップ領域に含まれる場合はTrue, それ以外はFalseを返す
+
+# 1200x1200のタイルサイズに合わせてマスクをパディングする関数
+def pad_masks_to_tile_size(
+    masks,
+    tile_size=1200,
+):
+    if masks.ndim != 3:
+        raise ValueError(
+            f"Expected masks with shape [N, H, W], but got {masks.shape}"
+        )
+
+    n, h, w = masks.shape
+
+    if h == tile_size and w == tile_size:
+        return masks
+
+    padded_masks = torch.zeros(
+        (n, tile_size, tile_size),
+        dtype=masks.dtype,
+        device=masks.device,
+    )
+
+    copy_h = min(h, tile_size)
+    copy_w = min(w, tile_size)
+
+    padded_masks[:, :copy_h, :copy_w] = masks[:, :copy_h, :copy_w]
+
+    return padded_masks
 
 # =====================================
 # Adjacent-tile duplicate removal
@@ -273,6 +308,28 @@ def main():
         labels = prediction["labels"]
         scores = prediction["scores"]
 
+        if "masks" not in prediction:
+            raise KeyError(
+                f"'masks' not found in prediction file: {pred_file}"
+            )
+
+        masks = prediction["masks"]
+
+        # torchvision Mask R-CNN usually outputs masks as [N, 1, H, W].
+        # Convert to [N, H, W].
+        if masks.ndim == 4 and masks.shape[1] == 1:
+            masks = masks[:, 0]
+
+        # Convert probability masks to binary masks.
+        masks = masks >= args.mask_thresh#各ピクセルに確率が入っているので，閾値以上のピクセルをTrue, それ以外をFalseにすることで二値化している
+
+        # Pad edge-tile masks to [N, tile_size, tile_size].
+
+        masks = pad_masks_to_tile_size(
+            masks,
+            tile_size=args.tile_size,
+        )
+
         global_boxes = shift_boxes_to_global(
             boxes,
             tile_x,
@@ -292,6 +349,7 @@ def main():
             "boxes": global_boxes,
             "labels": labels,
             "scores": scores,
+            "masks": masks,
             "overlap_flags": overlap_flags,
         }
         
@@ -339,6 +397,7 @@ def main():
     all_boxes = []
     all_labels = []
     all_scores = []
+    all_masks = []
     removed_count = 0
 
     for tile_key, tile in tile_predictions.items():
@@ -354,17 +413,21 @@ def main():
         all_boxes.append(tile["boxes"][keep_mask])
         all_labels.append(tile["labels"][keep_mask])
         all_scores.append(tile["scores"][keep_mask])
+        all_masks.append(tile["masks"][keep_mask])
 
     merged_boxes = torch.cat(all_boxes, dim=0)
     merged_labels = torch.cat(all_labels, dim=0)
     merged_scores = torch.cat(all_scores, dim=0)
+    merged_masks = torch.cat(all_masks, dim=0)
 
     merged_prediction = {
         "boxes": merged_boxes,
         "labels": merged_labels,
         "scores": merged_scores,
+        "masks": merged_masks,
         "tile_size": args.tile_size,
         "overlap": args.overlap,
+        "mask_thresh": args.mask_thresh,
         "num_tiles": len(prediction_files),
         "num_removed_duplicates": removed_count,
     }
@@ -375,6 +438,8 @@ def main():
 
     torch.save(merged_prediction, output_path)
     print(f"Removed duplicate detections: {removed_count}")
+    print(f"Merged boxes : {merged_boxes.shape}")
+    print(f"Merged masks : {merged_masks.shape}")
     print(f"Merged predictions saved to: {output_path}")
 
 
