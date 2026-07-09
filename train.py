@@ -9,6 +9,7 @@ from pycocotools.cocoeval import COCOeval
 from pycocotools import mask as mask_utils
 from models.maskrcnn import get_model
 from utils.dataset import CocoDiatomDataset
+from utils.metrics_logger import init_metrics_csv, append_metrics_csv
 
 
 NUM_CLASSES = 20
@@ -264,6 +265,8 @@ def main():
     args = get_args()
     
     os.makedirs(args.output_dir, exist_ok=True)
+
+    metrics_csv_path = init_metrics_csv(args.output_dir)
     
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Device:", device)
@@ -315,6 +318,11 @@ def main():
     # Training
     for epoch in range(args.epochs):
         model.train()
+
+        val_loss = None
+        bbox_metrics = None
+        segm_metrics = None
+
         epoch_loss = 0.0
 
         for images, targets in train_loader:
@@ -384,9 +392,20 @@ def main():
 
         torch.save(
             model.state_dict(),
-            save_path
+            save_path,
         )
         print(f"Saved: {save_path}")
+
+        append_metrics_csv(
+            metrics_csv_path=metrics_csv_path,
+            epoch=epoch + 1,
+            train_loss=avg_loss,
+            val_loss=val_loss,
+            bbox_metrics=bbox_metrics,
+            segm_metrics=segm_metrics,
+            checkpoint_path=save_path,
+        )
+        print(f"Metrics saved to: {metrics_csv_path}")
 
 
 if __name__ == "__main__":
