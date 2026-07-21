@@ -1,1 +1,9 @@
+numpy
+matplotlib
+Pillow
+pycocotools
+scikit-image
+torch
+torchvision
+zstandard
 i
