@@ -21,6 +21,7 @@ import torch
 
 
 def get_args():
+    """予測統合に使用するコマンドライン引数を定義して返す。"""
     parser = argparse.ArgumentParser(
         description="Merge tile-level predictions into slide-level predictions."
     )
@@ -74,6 +75,7 @@ def get_args():
 # =====================================
 
 def parse_tile_xy(path):
+    """予測ファイル名からタイルのx・y番号を読み取る。"""
     name = Path(path).stem
 
     match = re.search(r"x(\d+)_y(\d+)", name)
@@ -93,6 +95,7 @@ def shift_boxes_to_global(# グローバル座標に変換する関数
     tile_size=1200,
     overlap=180,
 ):
+    """タイル内のボックス座標をスライド全体の座標へ変換する。"""
     stride = tile_size - overlap
 
     x_offset = (tile_x - 1) * stride
@@ -111,6 +114,7 @@ def shift_boxes_to_global(# グローバル座標に変換する関数
 
 #Bounding boxの中心座標を計算する関数
 def get_box_centers(boxes):
+    """各バウンディングボックスの中心x・y座標を計算する。"""
     x_centers = (boxes[:, 0] + boxes[:, 2]) / 2
     y_centers = (boxes[:, 1] + boxes[:, 3]) / 2
 
@@ -122,6 +126,7 @@ def is_in_overlap_region(
     tile_size=1200,
     overlap=180,
 ):
+    """各ボックスの中心がタイルの重複領域内にあるか判定する。"""
     x_centers, y_centers = get_box_centers(boxes)
 
     in_left_overlap = x_centers < overlap
@@ -143,6 +148,7 @@ def pad_masks_to_tile_size(
     masks,
     tile_size=1200,
 ):
+    """端のタイルを含むマスクを指定タイルサイズまでゼロ埋めする。"""
     if masks.ndim != 3:
         raise ValueError(
             f"Expected masks with shape [N, H, W], but got {masks.shape}"
@@ -176,6 +182,7 @@ def get_edge_indices(
     tile_size=1200,
     overlap=180,
 ):
+    """指定したタイル端の重複領域にある検出番号を取得する。"""
     x_centers, y_centers = get_box_centers(local_boxes)
 
     if edge == "left":
@@ -200,6 +207,7 @@ def find_duplicate_indices_between_tiles(
     overlap=180,
     iou_thresh=0.5,
 ):
+    """隣接タイルの同一クラスをIoUで照合し、削除対象を返す。"""
     local_boxes_a = tile_a["local_boxes"]
     global_boxes_a = tile_a["boxes"]
     labels_a = tile_a["labels"]
@@ -280,6 +288,7 @@ def find_duplicate_indices_between_tiles(
 
 
 def main():
+    """全タイル予測を読み込み、重複を除去して1ファイルへ統合する。"""
     args = get_args()
     prediction_files = sorted(
         Path(args.prediction_dir).glob("*.pt")
@@ -344,6 +353,16 @@ def main():
             overlap=args.overlap,
         )
 
+        stride = args.tile_size - args.overlap
+        tile_origin = torch.tensor(
+            [(tile_x - 1) * stride, (tile_y - 1) * stride],
+            dtype=torch.float32,
+        ).repeat(len(boxes), 1)
+        tile_indices = torch.tensor(
+            [tile_x, tile_y],
+            dtype=torch.int64,
+        ).repeat(len(boxes), 1)
+
         tile_predictions[(tile_x, tile_y)] = {
             "local_boxes": boxes,
             "boxes": global_boxes,
@@ -351,6 +370,8 @@ def main():
             "scores": scores,
             "masks": masks,
             "overlap_flags": overlap_flags,
+            "tile_origins": tile_origin,
+            "tile_indices": tile_indices,
         }
         
     print(f"Loaded {len(tile_predictions)} tiles.")
@@ -398,6 +419,8 @@ def main():
     all_labels = []
     all_scores = []
     all_masks = []
+    all_tile_origins = []
+    all_tile_indices = []
     removed_count = 0
 
     for tile_key, tile in tile_predictions.items():
@@ -414,17 +437,23 @@ def main():
         all_labels.append(tile["labels"][keep_mask])
         all_scores.append(tile["scores"][keep_mask])
         all_masks.append(tile["masks"][keep_mask])
+        all_tile_origins.append(tile["tile_origins"][keep_mask])
+        all_tile_indices.append(tile["tile_indices"][keep_mask])
 
     merged_boxes = torch.cat(all_boxes, dim=0)
     merged_labels = torch.cat(all_labels, dim=0)
     merged_scores = torch.cat(all_scores, dim=0)
     merged_masks = torch.cat(all_masks, dim=0)
+    merged_tile_origins = torch.cat(all_tile_origins, dim=0)
+    merged_tile_indices = torch.cat(all_tile_indices, dim=0)
 
     merged_prediction = {
         "boxes": merged_boxes,
         "labels": merged_labels,
         "scores": merged_scores,
         "masks": merged_masks,
+        "tile_origins": merged_tile_origins,
+        "tile_indices": merged_tile_indices,
         "tile_size": args.tile_size,
         "overlap": args.overlap,
         "mask_thresh": args.mask_thresh,
