@@ -12,7 +12,7 @@ from utils.dataset import CocoDiatomDataset
 from utils.metrics_logger import init_metrics_csv, append_metrics_csv
 
 
-NUM_CLASSES = 20
+NUM_CLASSES = 12
 
 
 
