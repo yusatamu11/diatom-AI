@@ -21,7 +21,77 @@ For tar.zst support:
 pip install zstandard
 ```
 
+## Training
+
+`train.py` reads the foreground category IDs and names from the training COCO
+annotation JSON. Category IDs must be contiguous and start at 1 because 0 is
+reserved for the Mask R-CNN background class. The validation JSON must contain
+the same category definition.
+
+```bash
+python train.py \
+  --image_dir /path/to/dataset/train/images \
+  --ann_file /path/to/dataset/train/annotations.json \
+  --val_image_dir /path/to/dataset/validation/images \
+  --val_ann_file /path/to/dataset/validation/annotations.json \
+  --epochs 100 \
+  --batch_size 2 \
+  --output_dir runs/experiment_name
+```
+
+Each checkpoint stores the model weights, number of classes, category names,
+and epoch. `detect.py` and `continuous_detect.py` read these values
+automatically. Legacy checkpoints containing only a model state dictionary are
+also accepted; their output size is inferred from the classifier weights, but
+they do not contain class names.
+
 ## Prediction post-processing
+
+### PyTorch prediction files (`.pt`)
+
+The `.pt` files written by `continuous_detect.py` can be analyzed directly.
+For one sample, merge overlapping tiles, remove duplicate detections, measure
+the original binary masks, and write an instance-level CSV:
+
+```bash
+python process_pt_predictions.py \
+  --prediction_dir /path/to/A09-175/inference \
+  --csv_output /path/to/results/A09-175_morphology.csv \
+  --class_map /path/to/coco_annotations.json
+```
+
+`--class_map` accepts either a COCO annotation JSON containing `categories`, a
+JSON object such as `{"1": "A.subarctica"}`, or a JSON list whose positions
+are class IDs. If it is omitted, fallback names such as `class_1` are used.
+Use `--merged_output results/A09-175_merged.pt` when the duplicate-removed
+predictions should also be retained.
+
+To process multiple samples, place one prediction directory per sample under
+an input directory. `.tar.zst` prediction archives are also accepted:
+
+```text
+prediction_samples/
+├── A09-175/
+│   ├── A09-175_x0001_y0001.pt
+│   └── A09-175_x0002_y0001.pt
+└── A09-176/
+    ├── A09-176_x0001_y0001.pt
+    └── A09-176_x0002_y0001.pt
+```
+
+```bash
+python batch_pt_identification_morphology.py \
+  --input_dir /path/to/prediction_samples \
+  --output_dir /path/to/results \
+  --class_map /path/to/coco_annotations.json
+```
+
+The batch command calls the one-sample processor for every sample, preserves
+per-sample morphology CSVs, and creates `morphology_all_samples.csv`,
+`identification_summary.csv`, and identification plots. Add `--save_merged`
+to retain a duplicate-removed `.pt` file for every sample.
+
+### JSON prediction files
 
 Process every JSON prediction archive in a directory, remove duplicate
 detections between overlapping tiles, calculate morphology with

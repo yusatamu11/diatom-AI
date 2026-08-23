@@ -8,11 +8,9 @@ from torch.utils.data import DataLoader
 from pycocotools.cocoeval import COCOeval
 from pycocotools import mask as mask_utils
 from models.maskrcnn import get_model
+from utils.checkpoint import make_training_checkpoint
 from utils.dataset import CocoDiatomDataset
 from utils.metrics_logger import init_metrics_csv, append_metrics_csv
-
-
-NUM_CLASSES = 12
 
 
 
@@ -276,6 +274,9 @@ def main():
         args.image_dir,
         args.ann_file,
     )
+    num_classes = train_dataset.num_classes
+    print(f"Model classes (including background): {num_classes}")
+    print(f"Foreground categories: {train_dataset.category_names}")
 
     # DataLoader for training
     train_loader = DataLoader(
@@ -293,6 +294,12 @@ def main():
             args.val_image_dir,
             args.val_ann_file,
         )
+        if val_dataset.category_names != train_dataset.category_names:
+            raise ValueError(
+                "Training and validation category definitions do not match. "
+                f"train={train_dataset.category_names}, "
+                f"validation={val_dataset.category_names}"
+            )
 
         val_loader = DataLoader(
             val_dataset,
@@ -303,7 +310,7 @@ def main():
         )
     
     # Model
-    model = get_model(NUM_CLASSES)
+    model = get_model(num_classes)
     model.to(device)
 
     # Optimizer
@@ -390,10 +397,12 @@ def main():
             f"maskrcnn_epoch_{epoch + 1}.pth"
         )
 
-        torch.save(
-            model.state_dict(),
-            save_path,
+        checkpoint = make_training_checkpoint(
+            model=model,
+            category_names=train_dataset.category_names,
+            epoch=epoch + 1,
         )
+        torch.save(checkpoint, save_path)
         print(f"Saved: {save_path}")
 
         append_metrics_csv(

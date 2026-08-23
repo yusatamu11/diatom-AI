@@ -26,6 +26,19 @@ class CocoDiatomDataset(Dataset):
         self.image_dir = image_dir
         self.coco = COCO(ann_file)
         self.ids = list(self.coco.imgs.keys())
+        self.category_names = {
+            int(category_id): str(category["name"])
+            for category_id, category in self.coco.cats.items()
+        }
+        category_ids = sorted(self.category_names)
+        expected_ids = list(range(1, len(category_ids) + 1))
+        if category_ids != expected_ids:
+            raise ValueError(
+                "Torchvision Mask R-CNN requires contiguous foreground "
+                "category IDs starting at 1. "
+                f"Expected {expected_ids}, got {category_ids}."
+            )
+        self.num_classes = len(category_ids) + 1  # foreground classes + background
         
     def __len__(self):
         return len(self.ids)

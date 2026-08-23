@@ -16,12 +16,11 @@ import torchvision.transforms.functional as F
 from PIL import Image
 
 from models.maskrcnn import get_model
+from utils.checkpoint import load_training_checkpoint
 from utils.visualize import save_visualization
 from utils.archive import archive_directory
 
 from pathlib import Path #detect.pyと違う．一気に画像を取得可能
-
-NUM_CLASSES = 20
 
 def get_args():
     parser = argparse.ArgumentParser(
@@ -97,10 +96,16 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Device:", device)
 
-    model = get_model(NUM_CLASSES)
-    model.load_state_dict(
-        torch.load(args.weights, map_location=device)
+    state_dict, num_classes, class_names, checkpoint_metadata = (
+        load_training_checkpoint(args.weights, map_location=device)
     )
+    print(f"Model classes (including background): {num_classes}")
+    if class_names:
+        print(f"Foreground categories: {class_names}")
+    else:
+        print("Class names are unavailable in this legacy checkpoint.")
+    model = get_model(num_classes)
+    model.load_state_dict(state_dict)
     model.to(device)
     model.eval()
     
@@ -135,6 +140,9 @@ def main():
             "scores": scores.detach().cpu(),
             "masks": masks.detach().cpu(),
             "image_path": str(image_path),
+            "class_names": class_names,
+            "checkpoint_format": checkpoint_metadata["format"],
+            "checkpoint_epoch": checkpoint_metadata["epoch"],
         }
         
         torch.save(result, output_path)
