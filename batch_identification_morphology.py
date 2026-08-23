@@ -18,6 +18,21 @@ TARGET_COLORS = {
     "A.ambigua": "#76C9D8",
     "Fragilariophycea": "#F1DD63",
     "cyclostephanoids": "#A98AD9",
+    "plant fragment": "#8FA36B",
+}
+
+# 独立した珪藻個体として数えないため、相対産出率の分母から除外するクラス。
+EXCLUDED_FROM_RELATIVE_ABUNDANCE = {
+    "plant fragment",
+    "buble",
+    "debri",
+    "band",
+}
+
+# 1検出が2 valvesに相当する分類群は、相対産出率計算時に2倍する。
+VALVE_COUNT_MULTIPLIERS = {
+    "cyclostephanoids": 2,
+    "Fragilariophycea": 2,
 }
 
 
@@ -63,6 +78,7 @@ def write_identification_summary(rows, output_path):
     """試料・分類群ごとの個体数と相対産出率をCSVへ保存する。"""
     fields = [
         "sample", "class_id", "class_name", "count",
+        "valve_equivalent_count",
         "relative_abundance_percent",
     ]
     with Path(output_path).open("w", newline="", encoding="utf-8") as file:
@@ -72,26 +88,29 @@ def write_identification_summary(rows, output_path):
 
 
 def make_plots(summary_rows, output_dir):
-    """4分類群の個体数と相対産出率を指定色のグラフとして保存する。"""
+    """珪藻の相対産出率とplant fragment検出数を別ファイルで保存する。"""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
     samples = sorted({row["sample"] for row in summary_rows}, key=natural_key)
-    class_order = [
+    community_class_order = [
         "cyclostephanoids", "Fragilariophycea", "A.ambigua", "A.subarctica",
     ]
     lookup = {(row["sample"], row["class_name"]): row for row in summary_rows}
 
-    for value_key, axis_label, stem in (
-        ("count", "Count", "diatom_identification_counts"),
-        (
-            "relative_abundance_percent", "Relative abundance (%)",
-            "diatom_identification_relative_abundance",
-        ),
-    ):
+    for value_key, axis_label, stem in ((
+        "relative_abundance_percent", "Valve relative abundance (%)",
+        "diatom_identification_relative_abundance",
+    ),):
+        class_order = community_class_order
+        shared_xmax = max(
+            float(lookup.get((sample, "A.subarctica"), {}).get(value_key, 0))
+            for sample in samples
+        ) * 1.05
         fig, axes = plt.subplots(
-            1, len(class_order), figsize=(13.5, 7.5),
+            1, len(class_order),
+            figsize=(13.5, 7.5),
             sharey=True, constrained_layout=True,
         )
         y_positions = list(range(len(samples)))
@@ -106,22 +125,62 @@ def make_plots(summary_rows, output_dir):
                 edgecolor=color, linewidth=0.8,
             )
             axis.plot(values, y_positions, "o--", color="black", linewidth=1, markersize=3)
-            axis.set_title(class_name, color=color, fontstyle="italic", fontsize=13)
+            axis.set_title(
+                class_name,
+                color=color,
+                fontstyle="normal" if class_name == "plant fragment" else "italic",
+                fontsize=13,
+            )
             axis.set_xlabel(axis_label)
             axis.xaxis.set_label_position("top")
             axis.xaxis.tick_top()
             axis.grid(axis="x", color="#D7D7D7", linewidth=0.6)
             axis.set_axisbelow(True)
+            axis.set_xlim(0, shared_xmax)
             axis.margins(y=0.04)
         axes[0].set_yticks(y_positions, labels=samples)
+        axes[0].tick_params(axis="y", labelleft=True)
         axes[0].invert_yaxis()
         axes[0].set_ylabel("Sample")
         png_path = Path(output_dir) / f"{stem}.png"
-        pdf_path = Path(output_dir) / f"{stem}.pdf"
-        fig.savefig(png_path, dpi=300, bbox_inches="tight")
-        fig.savefig(pdf_path, bbox_inches="tight")
+        for suffix in ("png", "pdf", "svg"):
+            fig.savefig(
+                Path(output_dir) / f"{stem}.{suffix}",
+                dpi=300 if suffix == "png" else None,
+                bbox_inches="tight",
+            )
         plt.close(fig)
         print(f"Saved plot: {png_path}")
+
+    values = [
+        float(lookup.get((sample, "plant fragment"), {}).get("count", 0))
+        for sample in samples
+    ]
+    y_positions = list(range(len(samples)))
+    fig, axis = plt.subplots(figsize=(5.5, 7.5), constrained_layout=True)
+    axis.barh(
+        y_positions, values, color=TARGET_COLORS["plant fragment"], alpha=0.72,
+        edgecolor=TARGET_COLORS["plant fragment"], linewidth=0.8,
+    )
+    axis.plot(values, y_positions, "o--", color="black", linewidth=1, markersize=3)
+    axis.set_title("plant fragment", color=TARGET_COLORS["plant fragment"], fontsize=13)
+    axis.set_xlabel("Count")
+    axis.xaxis.set_label_position("top")
+    axis.xaxis.tick_top()
+    axis.grid(axis="x", color="#D7D7D7", linewidth=0.6)
+    axis.set_axisbelow(True)
+    axis.set_xlim(0, max(values) * 1.05 if max(values) > 0 else 1)
+    axis.set_yticks(y_positions, labels=samples)
+    axis.invert_yaxis()
+    axis.set_ylabel("Sample")
+    stem = "plant_fragment_counts"
+    for suffix in ("png", "pdf", "svg"):
+        fig.savefig(
+            Path(output_dir) / f"{stem}.{suffix}",
+            dpi=300 if suffix == "png" else None,
+            bbox_inches="tight",
+        )
+    plt.close(fig)
 
 
 def main():
@@ -173,12 +232,23 @@ def main():
                         combined_writer.writerow({"sample": sample, **row})
                 for class_name in sorted(counts):
                     count = counts[class_name]
+                    valve_count = count * VALVE_COUNT_MULTIPLIERS.get(class_name, 1)
+                    relative_total = sum(
+                        class_count * VALVE_COUNT_MULTIPLIERS.get(name, 1)
+                        for name, class_count in counts.items()
+                        if name not in EXCLUDED_FROM_RELATIVE_ABUNDANCE
+                    )
                     summary_rows.append({
                         "sample": sample,
                         "class_id": class_ids[class_name],
                         "class_name": class_name,
                         "count": count,
-                        "relative_abundance_percent": 100 * count / total if total else 0,
+                        "valve_equivalent_count": valve_count,
+                        "relative_abundance_percent": (
+                            ""
+                            if class_name in EXCLUDED_FROM_RELATIVE_ABUNDANCE
+                            else 100 * valve_count / relative_total if relative_total else 0
+                        ),
                     })
 
     summary_path = output_dir / "identification_summary.csv"
