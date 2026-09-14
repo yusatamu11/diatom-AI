@@ -47,8 +47,8 @@ they do not contain class names.
 
 With validation enabled, training also writes `class_metrics.csv` with bbox and
 segmentation AP/AP50/AP75/AR100 for every foreground class, saves a class-wise
-AP plot for each epoch, and updates `best_model.pth` whenever validation
-segmentation AP improves.
+AP plot and a screenshot-friendly metrics table PNG for each epoch, and updates
+`best_model.pth` whenever validation segmentation AP improves.
 
 Evaluate any saved metadata checkpoint without retraining:
 

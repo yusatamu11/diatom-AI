@@ -16,6 +16,7 @@ from utils.metrics_logger import (
     init_class_metrics_csv,
     init_metrics_csv,
     save_class_ap_plot,
+    save_class_metrics_table,
 )
 
 
@@ -97,25 +98,62 @@ def extract_coco_metrics(coco_eval, coco_gt, coco_results):
     }
 
 
-def print_class_metrics(metrics, metric_type):
-    """Print a compact class-wise AP table after validation."""
-    if metrics is None:
+def print_class_metrics(bbox_metrics, segm_metrics):
+    """Print one compact table combining bbox and segmentation results."""
+    bbox_by_class = (bbox_metrics or {}).get("per_class", {})
+    segm_by_class = (segm_metrics or {}).get("per_class", {})
+    category_ids = sorted(set(bbox_by_class) | set(segm_by_class))
+    if not category_ids:
         return
-    print(f"Validation {metric_type} class-wise metrics:")
-    print("  class                         GT   pred      AP    AP50    AP75   AR100")
-    for class_metrics in metrics["per_class"].values():
-        def display(value):
-            return "   n/a" if value is None else f"{value:6.3f}"
 
-        print(
-            f"  {class_metrics['class_name']:<27} "
-            f"{class_metrics['gt_count']:>5} "
-            f"{class_metrics['prediction_count']:>6} "
-            f"{display(class_metrics['AP'])} "
-            f"{display(class_metrics['AP50'])} "
-            f"{display(class_metrics['AP75'])} "
-            f"{display(class_metrics['AR100'])}"
+    rows = []
+    for category_id in category_ids:
+        bbox = bbox_by_class.get(category_id, {})
+        segm = segm_by_class.get(category_id, {})
+        category = segm or bbox
+        rows.append(
+            [
+                category.get("class_name", f"class_{category_id}"),
+                str(max(bbox.get("gt_count", 0), segm.get("gt_count", 0))),
+                str(max(
+                    bbox.get("prediction_count", 0),
+                    segm.get("prediction_count", 0),
+                )),
+                _format_console_metric(bbox.get("AP")),
+                _format_console_metric(segm.get("AP")),
+                _format_console_metric(segm.get("AP50")),
+                _format_console_metric(segm.get("AP75")),
+                _format_console_metric(segm.get("AR100")),
+            ]
         )
+
+    headers = [
+        "class", "GT", "pred", "bbox AP", "segm AP", "AP50", "AP75", "AR100"
+    ]
+    widths = [
+        max(len(headers[index]), *(len(row[index]) for row in rows))
+        for index in range(len(headers))
+    ]
+    separator = "+-" + "-+-".join("-" * width for width in widths) + "-+"
+
+    def render(row):
+        cells = [f"{row[0]:<{widths[0]}}"]
+        cells.extend(
+            f"{value:>{widths[index]}}" for index, value in enumerate(row[1:], 1)
+        )
+        return "| " + " | ".join(cells) + " |"
+
+    print("\nValidation class-wise metrics")
+    print(separator)
+    print(render(headers))
+    print(separator)
+    for row in rows:
+        print(render(row))
+    print(separator)
+
+
+def _format_console_metric(value):
+    return "n/a" if value is None else f"{value:.3f}"
 
 # validationのlossを計算する関数．model.eval()では計算できないので，model.train()にして計算する．
 @torch.no_grad()
@@ -459,7 +497,6 @@ def main():
                     f"AP50={bbox_metrics['AP50']:.4f}, "
                     f"AP75={bbox_metrics['AP75']:.4f}"
                 )
-                print_class_metrics(bbox_metrics, "bbox")
 
             print("Running COCO segm evaluation...")
             segm_metrics = evaluate_coco_segm(
@@ -477,7 +514,8 @@ def main():
                     f"AP50={segm_metrics['AP50']:.4f}, "
                     f"AP75={segm_metrics['AP75']:.4f}"
                 )
-                print_class_metrics(segm_metrics, "segm")
+
+            print_class_metrics(bbox_metrics, segm_metrics)
 
         save_path = os.path.join(
             args.output_dir,
@@ -525,9 +563,17 @@ def main():
                 bbox_metrics=bbox_metrics,
                 segm_metrics=segm_metrics,
             )
+            table_path = save_class_metrics_table(
+                output_dir=args.output_dir,
+                epoch=epoch + 1,
+                bbox_metrics=bbox_metrics,
+                segm_metrics=segm_metrics,
+            )
             print(f"Class metrics saved to: {class_metrics_csv_path}")
             if plot_path is not None:
                 print(f"Class AP plot saved to: {plot_path}")
+            if table_path is not None:
+                print(f"Class metrics table saved to: {table_path}")
 
 
 if __name__ == "__main__":

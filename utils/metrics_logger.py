@@ -188,6 +188,109 @@ def save_class_ap_plot(output_dir, epoch, bbox_metrics, segm_metrics):
     return output_path
 
 
+def save_class_metrics_table(output_dir, epoch, bbox_metrics, segm_metrics):
+    """Save a screenshot-friendly PNG table of per-class validation metrics."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import Normalize
+
+    bbox_by_class = (bbox_metrics or {}).get("per_class", {})
+    segm_by_class = (segm_metrics or {}).get("per_class", {})
+    category_ids = sorted(set(bbox_by_class) | set(segm_by_class))
+    if not category_ids:
+        return None
+
+    def metric_text(value):
+        return "—" if value is None else f"{value:.3f}"
+
+    rows = []
+    segm_ap_values = []
+    for category_id in category_ids:
+        bbox = bbox_by_class.get(category_id, {})
+        segm = segm_by_class.get(category_id, {})
+        category = segm or bbox
+        segm_ap = segm.get("AP")
+        segm_ap_values.append(segm_ap)
+        rows.append(
+            [
+                category.get("class_name", f"class_{category_id}"),
+                str(max(bbox.get("gt_count", 0), segm.get("gt_count", 0))),
+                str(max(
+                    bbox.get("prediction_count", 0),
+                    segm.get("prediction_count", 0),
+                )),
+                metric_text(bbox.get("AP")),
+                metric_text(segm_ap),
+                metric_text(segm.get("AP50")),
+                metric_text(segm.get("AP75")),
+                metric_text(segm.get("AR100")),
+            ]
+        )
+
+    columns = [
+        "Class", "GT", "Pred", "BBox AP", "Segm AP", "AP50", "AP75", "AR100"
+    ]
+    figure_height = max(5.0, 0.48 * len(rows) + 1.5)
+    fig, axis = plt.subplots(figsize=(11.5, figure_height))
+    fig.patch.set_facecolor("white")
+    axis.axis("off")
+    axis.set_title(
+        f"Validation class-wise metrics — epoch {epoch}",
+        loc="left",
+        fontsize=16,
+        fontweight="bold",
+        color="#17324D",
+        pad=18,
+    )
+    table = axis.table(
+        cellText=rows,
+        colLabels=columns,
+        cellLoc="center",
+        colLoc="center",
+        colWidths=[0.27, 0.07, 0.08, 0.11, 0.11, 0.10, 0.10, 0.10],
+        bbox=[0.0, 0.0, 1.0, 0.94],
+    )
+    table.auto_set_font_size(False)
+    table.set_fontsize(11)
+    table.scale(1.0, 1.35)
+
+    for column_index in range(len(columns)):
+        cell = table[0, column_index]
+        cell.set_facecolor("#244B74")
+        cell.set_text_props(color="white", fontweight="bold")
+        cell.set_edgecolor("white")
+
+    color_map = plt.get_cmap("YlGn")
+    normalizer = Normalize(vmin=0.0, vmax=1.0)
+    for row_index, segm_ap in enumerate(segm_ap_values, start=1):
+        base_color = "#F3F6F9" if row_index % 2 == 0 else "white"
+        for column_index in range(len(columns)):
+            cell = table[row_index, column_index]
+            cell.set_facecolor(base_color)
+            cell.set_edgecolor("#D8E1EA")
+            cell.set_linewidth(0.7)
+        table[row_index, 0].set_text_props(ha="left", fontweight="bold")
+        if segm_ap is not None:
+            table[row_index, 4].set_facecolor(
+                color_map(0.22 + 0.65 * normalizer(segm_ap))
+            )
+            table[row_index, 4].set_text_props(fontweight="bold", color="#17324D")
+
+    fig.text(
+        0.01,
+        0.01,
+        "AP = IoU 0.50–0.95  |  Segm AP is shaded (higher is darker)",
+        fontsize=9,
+        color="#5D6B78",
+    )
+    output_path = os.path.join(output_dir, f"class_metrics_epoch_{epoch:03d}.png")
+    fig.savefig(output_path, dpi=200, bbox_inches="tight", facecolor="white")
+    plt.close(fig)
+    return output_path
+
+
 # 1 epoch分の学習・評価結果を metrics.csv に1行追記する。
 # bbox_metrics と segm_metrics は evaluate_coco_bbox / evaluate_coco_segm が返す辞書を想定する。
 def append_metrics_csv(
