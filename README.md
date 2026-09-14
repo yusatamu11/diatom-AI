@@ -45,6 +45,21 @@ automatically. Legacy checkpoints containing only a model state dictionary are
 also accepted; their output size is inferred from the classifier weights, but
 they do not contain class names.
 
+With validation enabled, training also writes `class_metrics.csv` with bbox and
+segmentation AP/AP50/AP75/AR100 for every foreground class, saves a class-wise
+AP plot for each epoch, and updates `best_model.pth` whenever validation
+segmentation AP improves.
+
+Evaluate any saved metadata checkpoint without retraining:
+
+```bash
+python evaluate_checkpoint.py \
+  --image_dir /path/to/dataset/validation/images \
+  --ann_file /path/to/dataset/validation/annotations.json \
+  --checkpoint runs/experiment_name/maskrcnn_epoch_1.pth \
+  --output_dir runs/experiment_name/evaluation_epoch_1
+```
+
 ## Prediction post-processing
 
 ### PyTorch prediction files (`.pt`)

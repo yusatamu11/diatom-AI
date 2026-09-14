@@ -10,12 +10,112 @@ from pycocotools import mask as mask_utils
 from models.maskrcnn import get_model
 from utils.checkpoint import make_training_checkpoint
 from utils.dataset import CocoDiatomDataset
-from utils.metrics_logger import init_metrics_csv, append_metrics_csv
+from utils.metrics_logger import (
+    append_class_metrics_csv,
+    append_metrics_csv,
+    init_class_metrics_csv,
+    init_metrics_csv,
+    save_class_ap_plot,
+)
 
 
 
 def collate_fn(batch):
     return tuple(zip(*batch))
+
+
+def _mean_valid(values):
+    """Average COCO values while ignoring the -1 missing-value sentinel."""
+    values = np.asarray(values, dtype=float)
+    values = values[values > -1]
+    if values.size == 0:
+        return None
+    return float(values.mean())
+
+
+def _iou_index(coco_eval, threshold):
+    matches = np.flatnonzero(np.isclose(coco_eval.params.iouThrs, threshold))
+    if len(matches) != 1:
+        raise ValueError(f"COCO IoU threshold not found: {threshold}")
+    return int(matches[0])
+
+
+def extract_coco_metrics(coco_eval, coco_gt, coco_results):
+    """Return overall and per-category metrics from an accumulated COCOeval."""
+    area_index = coco_eval.params.areaRngLbl.index("all")
+    max_dets_index = coco_eval.params.maxDets.index(100)
+    iou50_index = _iou_index(coco_eval, 0.50)
+    iou75_index = _iou_index(coco_eval, 0.75)
+    precision = coco_eval.eval["precision"]
+    recall = coco_eval.eval["recall"]
+
+    prediction_counts = {}
+    for result in coco_results:
+        category_id = int(result["category_id"])
+        prediction_counts[category_id] = prediction_counts.get(category_id, 0) + 1
+
+    per_class = {}
+    for category_index, category_id in enumerate(coco_eval.params.catIds):
+        category_id = int(category_id)
+        category = coco_gt.cats[category_id]
+        per_class[category_id] = {
+            "class_name": str(category["name"]),
+            "gt_count": len(
+                coco_gt.getAnnIds(
+                    imgIds=coco_eval.params.imgIds,
+                    catIds=[category_id],
+                    iscrowd=False,
+                )
+            ),
+            "prediction_count": prediction_counts.get(category_id, 0),
+            "AP": _mean_valid(
+                precision[:, :, category_index, area_index, max_dets_index]
+            ),
+            "AP50": _mean_valid(
+                precision[
+                    iou50_index, :, category_index, area_index, max_dets_index
+                ]
+            ),
+            "AP75": _mean_valid(
+                precision[
+                    iou75_index, :, category_index, area_index, max_dets_index
+                ]
+            ),
+            "AR100": _mean_valid(
+                recall[:, category_index, area_index, max_dets_index]
+            ),
+        }
+
+    return {
+        "AP": float(coco_eval.stats[0]),
+        "AP50": float(coco_eval.stats[1]),
+        "AP75": float(coco_eval.stats[2]),
+        "AP_small": float(coco_eval.stats[3]),
+        "AP_medium": float(coco_eval.stats[4]),
+        "AP_large": float(coco_eval.stats[5]),
+        "per_class": per_class,
+    }
+
+
+def print_class_metrics(metrics, metric_type):
+    """Print a compact class-wise AP table after validation."""
+    if metrics is None:
+        return
+    print(f"Validation {metric_type} class-wise metrics:")
+    print("  class                         GT   pred      AP    AP50    AP75   AR100")
+    for class_metrics in metrics["per_class"].values():
+        def display(value):
+            return "   n/a" if value is None else f"{value:6.3f}"
+
+        print(
+            f"  {class_metrics['class_name']:<27} "
+            f"{class_metrics['gt_count']:>5} "
+            f"{class_metrics['prediction_count']:>6} "
+            f"{display(class_metrics['AP'])} "
+            f"{display(class_metrics['AP50'])} "
+            f"{display(class_metrics['AP75'])} "
+            f"{display(class_metrics['AR100'])}"
+        )
 
 # validationのlossを計算する関数．model.eval()では計算できないので，model.train()にして計算する．
 @torch.no_grad()
@@ -102,16 +202,7 @@ def evaluate_coco_bbox(model, data_loader, device, score_thresh=0.0):
     coco_eval.accumulate()
     coco_eval.summarize()
 
-    metrics = {
-        "AP": float(coco_eval.stats[0]),
-        "AP50": float(coco_eval.stats[1]),
-        "AP75": float(coco_eval.stats[2]),
-        "AP_small": float(coco_eval.stats[3]),
-        "AP_medium": float(coco_eval.stats[4]),
-        "AP_large": float(coco_eval.stats[5]),
-    }
-
-    return metrics
+    return extract_coco_metrics(coco_eval, coco_gt, coco_results)
 
 # segmentationの評価を行う関数．COCOevalを用いてmAPを計算する．
 @torch.no_grad()
@@ -182,16 +273,7 @@ def evaluate_coco_segm(
     coco_eval.accumulate()
     coco_eval.summarize()
 
-    metrics = {
-        "AP": float(coco_eval.stats[0]),
-        "AP50": float(coco_eval.stats[1]),
-        "AP75": float(coco_eval.stats[2]),
-        "AP_small": float(coco_eval.stats[3]),
-        "AP_medium": float(coco_eval.stats[4]),
-        "AP_large": float(coco_eval.stats[5]),
-    }
-
-    return metrics
+    return extract_coco_metrics(coco_eval, coco_gt, coco_results)
 
 def get_args():
     parser = argparse.ArgumentParser()#インスタンス(オブジェクト)を作成
@@ -265,6 +347,7 @@ def main():
     os.makedirs(args.output_dir, exist_ok=True)
 
     metrics_csv_path = init_metrics_csv(args.output_dir)
+    class_metrics_csv_path = init_class_metrics_csv(args.output_dir)
     
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Device:", device)
@@ -322,6 +405,8 @@ def main():
     )
     
     
+    best_segm_ap = float("-inf")
+
     # Training
     for epoch in range(args.epochs):
         model.train()
@@ -374,6 +459,7 @@ def main():
                     f"AP50={bbox_metrics['AP50']:.4f}, "
                     f"AP75={bbox_metrics['AP75']:.4f}"
                 )
+                print_class_metrics(bbox_metrics, "bbox")
 
             print("Running COCO segm evaluation...")
             segm_metrics = evaluate_coco_segm(
@@ -391,6 +477,7 @@ def main():
                     f"AP50={segm_metrics['AP50']:.4f}, "
                     f"AP75={segm_metrics['AP75']:.4f}"
                 )
+                print_class_metrics(segm_metrics, "segm")
 
         save_path = os.path.join(
             args.output_dir,
@@ -405,6 +492,15 @@ def main():
         torch.save(checkpoint, save_path)
         print(f"Saved: {save_path}")
 
+        if segm_metrics is not None and segm_metrics["AP"] > best_segm_ap:
+            best_segm_ap = segm_metrics["AP"]
+            best_model_path = os.path.join(args.output_dir, "best_model.pth")
+            torch.save(checkpoint, best_model_path)
+            print(
+                f"New best model: {best_model_path} "
+                f"(segm AP={best_segm_ap:.4f})"
+            )
+
         append_metrics_csv(
             metrics_csv_path=metrics_csv_path,
             epoch=epoch + 1,
@@ -415,6 +511,23 @@ def main():
             checkpoint_path=save_path,
         )
         print(f"Metrics saved to: {metrics_csv_path}")
+
+        if val_loader is not None:
+            append_class_metrics_csv(
+                class_metrics_csv_path=class_metrics_csv_path,
+                epoch=epoch + 1,
+                bbox_metrics=bbox_metrics,
+                segm_metrics=segm_metrics,
+            )
+            plot_path = save_class_ap_plot(
+                output_dir=args.output_dir,
+                epoch=epoch + 1,
+                bbox_metrics=bbox_metrics,
+                segm_metrics=segm_metrics,
+            )
+            print(f"Class metrics saved to: {class_metrics_csv_path}")
+            if plot_path is not None:
+                print(f"Class AP plot saved to: {plot_path}")
 
 
 if __name__ == "__main__":
