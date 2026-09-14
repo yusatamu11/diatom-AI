@@ -155,6 +155,19 @@ def print_class_metrics(bbox_metrics, segm_metrics):
 def _format_console_metric(value):
     return "n/a" if value is None else f"{value:.3f}"
 
+
+def update_early_stopping(
+    current,
+    reference_best,
+    epochs_without_improvement,
+    min_delta,
+):
+    """Update early-stopping state using a minimum meaningful improvement."""
+    if reference_best is None or current > reference_best + min_delta:
+        return current, 0, True
+    return reference_best, epochs_without_improvement + 1, False
+
+
 # validationのlossを計算する関数．model.eval()では計算できないので，model.train()にして計算する．
 @torch.no_grad()
 def evaluate_loss(model, data_loader, device):
@@ -375,12 +388,43 @@ def get_args():
         default=0.5,
         help="Mask threshold used for COCO segmentation evaluation",
     )
+
+    parser.add_argument(
+        "--early_stopping_patience",
+        type=int,
+        default=15,
+        help=(
+            "Stop after this many validation epochs without a meaningful segm "
+            "AP improvement; set to 0 to disable"
+        ),
+    )
+
+    parser.add_argument(
+        "--early_stopping_min_epochs",
+        type=int,
+        default=20,
+        help="Always train for at least this many epochs before early stopping",
+    )
+
+    parser.add_argument(
+        "--early_stopping_min_delta",
+        type=float,
+        default=0.001,
+        help="Minimum segm AP increase counted as an early-stopping improvement",
+    )
     
     return parser.parse_args()
 
 
 def main():
     args = get_args()
+
+    if args.early_stopping_patience < 0:
+        raise ValueError("--early_stopping_patience must be 0 or greater")
+    if args.early_stopping_min_epochs < 1:
+        raise ValueError("--early_stopping_min_epochs must be 1 or greater")
+    if args.early_stopping_min_delta < 0:
+        raise ValueError("--early_stopping_min_delta must be 0 or greater")
     
     os.makedirs(args.output_dir, exist_ok=True)
 
@@ -444,6 +488,22 @@ def main():
     
     
     best_segm_ap = float("-inf")
+    early_stopping_best = None
+    epochs_without_improvement = 0
+    early_stopping_enabled = (
+        val_loader is not None and args.early_stopping_patience > 0
+    )
+    if early_stopping_enabled:
+        print(
+            "Early stopping enabled: "
+            f"metric=segm AP, min_epochs={args.early_stopping_min_epochs}, "
+            f"patience={args.early_stopping_patience}, "
+            f"min_delta={args.early_stopping_min_delta}"
+        )
+    elif args.early_stopping_patience == 0:
+        print("Early stopping disabled (--early_stopping_patience=0).")
+    else:
+        print("Early stopping disabled because no validation dataset was supplied.")
 
     # Training
     for epoch in range(args.epochs):
@@ -539,6 +599,33 @@ def main():
                 f"(segm AP={best_segm_ap:.4f})"
             )
 
+        stop_training = False
+        if early_stopping_enabled and segm_metrics is not None:
+            early_stopping_best, epochs_without_improvement, improved = (
+                update_early_stopping(
+                    current=segm_metrics["AP"],
+                    reference_best=early_stopping_best,
+                    epochs_without_improvement=epochs_without_improvement,
+                    min_delta=args.early_stopping_min_delta,
+                )
+            )
+            if epoch + 1 <= args.early_stopping_min_epochs:
+                epochs_without_improvement = 0
+            elif improved:
+                print(
+                    "Early stopping: meaningful improvement "
+                    f"(reference segm AP={early_stopping_best:.4f})."
+                )
+            else:
+                print(
+                    "Early stopping: no meaningful improvement for "
+                    f"{epochs_without_improvement}/"
+                    f"{args.early_stopping_patience} epoch(s)."
+                )
+                stop_training = (
+                    epochs_without_improvement >= args.early_stopping_patience
+                )
+
         append_metrics_csv(
             metrics_csv_path=metrics_csv_path,
             epoch=epoch + 1,
@@ -574,6 +661,14 @@ def main():
                 print(f"Class AP plot saved to: {plot_path}")
             if table_path is not None:
                 print(f"Class metrics table saved to: {table_path}")
+
+        if stop_training:
+            print(
+                f"Early stopping at epoch {epoch + 1}. "
+                f"Best segm AP={best_segm_ap:.4f}; "
+                "best weights are saved in best_model.pth."
+            )
+            break
 
 
 if __name__ == "__main__":

@@ -36,6 +36,9 @@ python train.py \
   --val_ann_file /path/to/dataset/validation/annotations.json \
   --epochs 100 \
   --batch_size 2 \
+  --early_stopping_min_epochs 20 \
+  --early_stopping_patience 15 \
+  --early_stopping_min_delta 0.001 \
   --output_dir runs/experiment_name
 ```
 
@@ -49,6 +52,12 @@ With validation enabled, training also writes `class_metrics.csv` with bbox and
 segmentation AP/AP50/AP75/AR100 for every foreground class, saves a class-wise
 AP plot and a screenshot-friendly metrics table PNG for each epoch, and updates
 `best_model.pth` whenever validation segmentation AP improves.
+
+Early stopping monitors the overall validation segmentation AP. By default,
+training runs for at least 20 epochs and stops after 15 subsequent epochs
+without an AP improvement greater than 0.001. Set
+`--early_stopping_patience 0` to disable early stopping. The final completed
+epoch is still checkpointed and logged before training stops.
 
 Evaluate any saved metadata checkpoint without retraining:
 
