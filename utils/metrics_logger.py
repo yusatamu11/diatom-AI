@@ -24,7 +24,17 @@ import numpy as np
 CSV_HEADER = [
     "epoch",
     "train_loss",
+    "train_loss_classifier",
+    "train_loss_box_reg",
+    "train_loss_mask",
+    "train_loss_objectness",
+    "train_loss_rpn_box_reg",
     "val_loss",
+    "val_loss_classifier",
+    "val_loss_box_reg",
+    "val_loss_mask",
+    "val_loss_objectness",
+    "val_loss_rpn_box_reg",
     "bbox_AP",
     "bbox_AP50",
     "bbox_AP75",
@@ -90,6 +100,13 @@ def get_metric(metrics, key):
 def _display_metric(value):
     """Return an empty CSV cell for unavailable COCO metrics."""
     return "" if value is None else value
+
+
+def _loss_component(components, name):
+    """Return an empty CSV cell when component losses are unavailable."""
+    if components is None:
+        return ""
+    return components.get(name, "")
 
 
 def append_class_metrics_csv(
@@ -301,6 +318,8 @@ def append_metrics_csv(
     bbox_metrics,
     segm_metrics,
     checkpoint_path,
+    train_loss_components=None,
+    val_loss_components=None,
 ):
     # "a" モードで開くことで、既存のCSVに行を追加する。
     # 各epoch終了時にこの関数を呼ぶと、epochごとの推移が保存される。
@@ -310,7 +329,17 @@ def append_metrics_csv(
             [
                 epoch,
                 train_loss,
+                _loss_component(train_loss_components, "loss_classifier"),
+                _loss_component(train_loss_components, "loss_box_reg"),
+                _loss_component(train_loss_components, "loss_mask"),
+                _loss_component(train_loss_components, "loss_objectness"),
+                _loss_component(train_loss_components, "loss_rpn_box_reg"),
                 val_loss if val_loss is not None else "",
+                _loss_component(val_loss_components, "loss_classifier"),
+                _loss_component(val_loss_components, "loss_box_reg"),
+                _loss_component(val_loss_components, "loss_mask"),
+                _loss_component(val_loss_components, "loss_objectness"),
+                _loss_component(val_loss_components, "loss_rpn_box_reg"),
                 get_metric(bbox_metrics, "AP"),
                 get_metric(bbox_metrics, "AP50"),
                 get_metric(bbox_metrics, "AP75"),

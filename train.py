@@ -20,6 +20,14 @@ from utils.metrics_logger import (
 )
 
 
+LOSS_NAMES = (
+    "loss_classifier",
+    "loss_box_reg",
+    "loss_mask",
+    "loss_objectness",
+    "loss_rpn_box_reg",
+)
+
 
 def collate_fn(batch):
     return tuple(zip(*batch))
@@ -168,15 +176,25 @@ def update_early_stopping(
     return reference_best, epochs_without_improvement + 1, False
 
 
+def average_loss_sums(loss_sums, image_count):
+    """Convert image-weighted loss sums into per-image epoch averages."""
+    if image_count <= 0:
+        return {}
+    return {name: value / image_count for name, value in loss_sums.items()}
+
+
 # validationのlossを計算する関数．model.eval()では計算できないので，model.train()にして計算する．
 @torch.no_grad()
 def evaluate_loss(model, data_loader, device):
     was_training = model.training
     model.train()
 
-    total_loss = 0.0
+    total_loss_sum = 0.0
+    component_loss_sums = {}
+    image_count = 0
 
     for images, targets in data_loader:
+        batch_size = len(images)
         images = [img.to(device) for img in images]
         targets = [
             {k: v.to(device) for k, v in t.items()}
@@ -186,14 +204,21 @@ def evaluate_loss(model, data_loader, device):
         loss_dict = model(images, targets)
         losses = sum(loss for loss in loss_dict.values())
 
-        total_loss += losses.item()
+        total_loss_sum += losses.item() * batch_size
+        for name in LOSS_NAMES:
+            if name in loss_dict:
+                component_loss_sums[name] = component_loss_sums.get(name, 0.0) + (
+                    loss_dict[name].item() * batch_size
+                )
+        image_count += batch_size
 
-    avg_loss = total_loss / len(data_loader)
+    avg_loss = total_loss_sum / image_count
+    avg_component_losses = average_loss_sums(component_loss_sums, image_count)
 
     if not was_training:
         model.eval()
 
-    return avg_loss
+    return avg_loss, avg_component_losses
 
 # bboxの評価を行う関数．COCOevalを用いてmAPを計算する．
 @torch.no_grad()
@@ -510,12 +535,16 @@ def main():
         model.train()
 
         val_loss = None
+        val_loss_components = None
         bbox_metrics = None
         segm_metrics = None
 
-        epoch_loss = 0.0
+        epoch_loss_sum = 0.0
+        train_component_loss_sums = {}
+        train_image_count = 0
 
         for images, targets in train_loader:
+            batch_size = len(images)
             images = [img.to(device) for img in images]
             targets = [
                 {k: v.to(device) for k, v in t.items()}
@@ -529,13 +558,25 @@ def main():
             losses.backward()
             optimizer.step()
 
-            epoch_loss += losses.item()
+            epoch_loss_sum += losses.item() * batch_size
+            for name in LOSS_NAMES:
+                if name in loss_dict:
+                    train_component_loss_sums[name] = train_component_loss_sums.get(
+                        name, 0.0
+                    ) + (
+                        loss_dict[name].item() * batch_size
+                    )
+            train_image_count += batch_size
             
-        avg_loss = epoch_loss / len(train_loader)
+        avg_loss = epoch_loss_sum / train_image_count
+        train_loss_components = average_loss_sums(
+            train_component_loss_sums,
+            train_image_count,
+        )
         print(f"Epoch [{epoch + 1}/{args.epochs}], train loss: {avg_loss:.4f}")
 
         if val_loader is not None:
-            val_loss = evaluate_loss(
+            val_loss, val_loss_components = evaluate_loss(
                 model,
                 val_loader,
                 device,
@@ -631,6 +672,8 @@ def main():
             epoch=epoch + 1,
             train_loss=avg_loss,
             val_loss=val_loss,
+            train_loss_components=train_loss_components,
+            val_loss_components=val_loss_components,
             bbox_metrics=bbox_metrics,
             segm_metrics=segm_metrics,
             checkpoint_path=save_path,

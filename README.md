@@ -53,6 +53,10 @@ segmentation AP/AP50/AP75/AR100 for every foreground class, saves a class-wise
 AP plot and a screenshot-friendly metrics table PNG for each epoch, and updates
 `best_model.pth` whenever validation segmentation AP improves.
 
+`metrics.csv` stores the total train/validation loss as well as image-weighted
+epoch averages for the five Mask R-CNN loss components: classifier, box
+regression, mask, RPN objectness, and RPN box regression.
+
 Early stopping monitors the overall validation segmentation AP. By default,
 training runs for at least 20 epochs and stops after 15 subsequent epochs
 without an AP improvement greater than 0.001. Set
