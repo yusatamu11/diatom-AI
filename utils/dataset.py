@@ -4,10 +4,10 @@ dataset.py
 Dataset utilities for training Mask R-CNN.
 
 This module provides a custom PyTorch Dataset for:
-- loading microscopy images
-- loading LabelMe annotations
+- loading microscopy images and COCO annotations
 - converting annotations into Mask R-CNN targets
-- preparing training and validation samples
+- applying synchronized image/mask augmentations
+- preparing class-balanced sampling weights
 """
 
 import os
@@ -21,9 +21,137 @@ from torch.utils.data import Dataset
 
 from pycocotools.coco import COCO
 
+
+class BasicDiatomAugmentation:
+    """Apply conservative microscopy augmentation to an image and its masks."""
+
+    def __init__(self, brightness=0.10, contrast=0.10):
+        self.brightness = brightness
+        self.contrast = contrast
+
+    def __call__(self, image, target):
+        masks = target["masks"]
+
+        if torch.rand(()) < 0.5:
+            image = F.hflip(image)
+            masks = F.hflip(masks)
+        if torch.rand(()) < 0.5:
+            image = F.vflip(image)
+            masks = F.vflip(masks)
+
+        quarter_turns = int(torch.randint(0, 4, ()).item())
+        if quarter_turns:
+            image = torch.rot90(image, quarter_turns, dims=(-2, -1))
+            masks = torch.rot90(masks, quarter_turns, dims=(-2, -1))
+
+        brightness_factor = 1.0 + (
+            float(torch.rand(()).item()) * 2.0 - 1.0
+        ) * self.brightness
+        contrast_factor = 1.0 + (
+            float(torch.rand(()).item()) * 2.0 - 1.0
+        ) * self.contrast
+        image = F.adjust_brightness(image, brightness_factor)
+        image = F.adjust_contrast(image, contrast_factor)
+
+        target = dict(target)
+        target["masks"] = masks
+        target = _rebuild_boxes_and_areas(target)
+        return image, target
+
+
+def _rebuild_boxes_and_areas(target):
+    """Rebuild boxes from transformed masks and discard any empty masks."""
+    masks = target["masks"]
+    valid_indices = []
+    boxes = []
+    areas = []
+
+    for index, mask in enumerate(masks):
+        y_coordinates, x_coordinates = torch.where(mask > 0)
+        if x_coordinates.numel() == 0:
+            continue
+        valid_indices.append(index)
+        boxes.append(
+            torch.stack(
+                [
+                    x_coordinates.min(),
+                    y_coordinates.min(),
+                    x_coordinates.max() + 1,
+                    y_coordinates.max() + 1,
+                ]
+            ).to(dtype=torch.float32)
+        )
+        areas.append(mask.sum().to(dtype=torch.float32))
+
+    if valid_indices:
+        indices = torch.as_tensor(valid_indices, dtype=torch.long)
+        target["masks"] = masks[indices]
+        target["labels"] = target["labels"][indices]
+        target["iscrowd"] = target["iscrowd"][indices]
+        target["boxes"] = torch.stack(boxes)
+        target["area"] = torch.stack(areas)
+    else:
+        height, width = masks.shape[-2:]
+        target["masks"] = masks.new_zeros((0, height, width))
+        target["labels"] = target["labels"].new_zeros((0,))
+        target["iscrowd"] = target["iscrowd"].new_zeros((0,))
+        target["boxes"] = torch.zeros((0, 4), dtype=torch.float32)
+        target["area"] = torch.zeros((0,), dtype=torch.float32)
+
+    return target
+
+
+def make_class_balanced_sample_weights(dataset, max_weight=5.0):
+    """Return capped inverse-square-root weights for images with rare classes."""
+    if max_weight < 1.0:
+        raise ValueError("max_weight must be 1.0 or greater")
+
+    annotation_counts = {
+        category_id: len(dataset.coco.getAnnIds(catIds=[category_id]))
+        for category_id in dataset.category_names
+    }
+    positive_counts = [count for count in annotation_counts.values() if count > 0]
+    if not positive_counts:
+        category_weights = {category_id: 1.0 for category_id in annotation_counts}
+        return (
+            torch.ones(len(dataset), dtype=torch.double),
+            annotation_counts,
+            category_weights,
+        )
+
+    reference_count = float(np.percentile(positive_counts, 75))
+    category_weights = {
+        category_id: min(
+            max_weight,
+            max(1.0, (reference_count / count) ** 0.5),
+        )
+        if count > 0
+        else 1.0
+        for category_id, count in annotation_counts.items()
+    }
+
+    sample_weights = []
+    for image_id in dataset.ids:
+        annotations = dataset.coco.imgToAnns.get(image_id, [])
+        present_categories = {int(ann["category_id"]) for ann in annotations}
+        sample_weights.append(
+            max(
+                (category_weights[category_id] for category_id in present_categories),
+                default=1.0,
+            )
+        )
+
+    return (
+        torch.as_tensor(sample_weights, dtype=torch.double),
+        annotation_counts,
+        category_weights,
+    )
+
+
 class CocoDiatomDataset(Dataset):
-    def __init__(self, image_dir, ann_file):
+    def __init__(self, image_dir, ann_file, transform=None):
         self.image_dir = image_dir
+        self.transform = transform
         self.coco = COCO(ann_file)
         self.ids = list(self.coco.imgs.keys())
         self.category_names = {
@@ -100,5 +228,8 @@ class CocoDiatomDataset(Dataset):
             "area": areas,
             "iscrowd": iscrowd,
         }
+
+        if self.transform is not None:
+            image, target = self.transform(image, target)
         
         return image, target

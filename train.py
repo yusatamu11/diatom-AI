@@ -1,15 +1,21 @@
 import os
 import argparse
+import json
+import random
 
 import numpy as np
 import torch
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, WeightedRandomSampler
 
 from pycocotools.cocoeval import COCOeval
 from pycocotools import mask as mask_utils
 from models.maskrcnn import get_model
 from utils.checkpoint import make_training_checkpoint
-from utils.dataset import CocoDiatomDataset
+from utils.dataset import (
+    BasicDiatomAugmentation,
+    CocoDiatomDataset,
+    make_class_balanced_sample_weights,
+)
 from utils.metrics_logger import (
     append_class_metrics_csv,
     append_metrics_csv,
@@ -31,6 +37,23 @@ LOSS_NAMES = (
 
 def collate_fn(batch):
     return tuple(zip(*batch))
+
+
+def seed_everything(seed):
+    """Seed training and data-loader randomness for repeatable experiments."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+
+def seed_worker(worker_id):
+    """Seed NumPy and Python inside each data-loader worker."""
+    del worker_id
+    worker_seed = torch.initial_seed() % (2**32)
+    np.random.seed(worker_seed)
+    random.seed(worker_seed)
 
 
 def _mean_valid(values):
@@ -379,6 +402,33 @@ def get_args():
         type=int,
         default=2,
     )
+
+    parser.add_argument(
+        "--augmentation",
+        choices=["none", "basic"],
+        default="none",
+        help="Training-only synchronized image/mask augmentation",
+    )
+
+    parser.add_argument(
+        "--balanced_sampling",
+        action="store_true",
+        help="Sample images containing rare classes more frequently",
+    )
+
+    parser.add_argument(
+        "--balanced_sampling_max_weight",
+        type=float,
+        default=5.0,
+        help="Maximum image sampling weight for rare classes",
+    )
+
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Random seed for model initialization, sampling, and augmentation",
+    )
     
     parser.add_argument(
         "--lr",
@@ -450,8 +500,18 @@ def main():
         raise ValueError("--early_stopping_min_epochs must be 1 or greater")
     if args.early_stopping_min_delta < 0:
         raise ValueError("--early_stopping_min_delta must be 0 or greater")
+    if args.balanced_sampling_max_weight < 1.0:
+        raise ValueError("--balanced_sampling_max_weight must be 1.0 or greater")
+
+    seed_everything(args.seed)
     
     os.makedirs(args.output_dir, exist_ok=True)
+
+    config_path = os.path.join(args.output_dir, "training_config.json")
+    with open(config_path, "w", encoding="utf-8") as file:
+        json.dump(vars(args), file, ensure_ascii=False, indent=2)
+        file.write("\n")
+    print(f"Training configuration saved to: {config_path}")
 
     metrics_csv_path = init_metrics_csv(args.output_dir)
     class_metrics_csv_path = init_class_metrics_csv(args.output_dir)
@@ -460,21 +520,63 @@ def main():
     print("Device:", device)
 
     # Dataset
+    train_transform = (
+        BasicDiatomAugmentation() if args.augmentation == "basic" else None
+    )
     train_dataset = CocoDiatomDataset(
         args.image_dir,
         args.ann_file,
+        transform=train_transform,
     )
     num_classes = train_dataset.num_classes
     print(f"Model classes (including background): {num_classes}")
     print(f"Foreground categories: {train_dataset.category_names}")
 
+    train_generator = torch.Generator()
+    train_generator.manual_seed(args.seed)
+    train_sampler = None
+    if args.balanced_sampling:
+        (
+            sample_weights,
+            annotation_counts,
+            category_weights,
+        ) = make_class_balanced_sample_weights(
+            train_dataset,
+            max_weight=args.balanced_sampling_max_weight,
+        )
+        sampler_generator = torch.Generator()
+        sampler_generator.manual_seed(args.seed + 1)
+        train_sampler = WeightedRandomSampler(
+            weights=sample_weights,
+            num_samples=len(train_dataset),
+            replacement=True,
+            generator=sampler_generator,
+        )
+        print("Class-balanced sampling enabled:")
+        for category_id, class_name in train_dataset.category_names.items():
+            print(
+                f"  {class_name}: {annotation_counts[category_id]} annotations, "
+                f"weight={category_weights[category_id]:.2f}"
+            )
+        print(
+            "  image weight range: "
+            f"{sample_weights.min().item():.2f}-"
+            f"{sample_weights.max().item():.2f}"
+        )
+
+    print(f"Training augmentation: {args.augmentation}")
+    print(f"Random seed: {args.seed}")
+
     # DataLoader for training
     train_loader = DataLoader(
         train_dataset,
         batch_size=args.batch_size,
-        shuffle=True,
+        shuffle=train_sampler is None,
+        sampler=train_sampler,
         num_workers=2,
         collate_fn=collate_fn,
+        worker_init_fn=seed_worker,
+        generator=train_generator,
     )
     
     val_loader = None

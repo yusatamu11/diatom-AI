@@ -36,6 +36,8 @@ python train.py \
   --val_ann_file /path/to/dataset/validation/annotations.json \
   --epochs 100 \
   --batch_size 2 \
+  --augmentation none \
+  --seed 42 \
   --early_stopping_min_epochs 20 \
   --early_stopping_patience 15 \
   --early_stopping_min_delta 0.001 \
@@ -62,6 +64,33 @@ training runs for at least 20 epochs and stops after 15 subsequent epochs
 without an AP improvement greater than 0.001. Set
 `--early_stopping_patience 0` to disable early stopping. The final completed
 epoch is still checkpointed and logged before training stops.
+
+Training augmentation is disabled by default. Use `--augmentation basic` to
+apply synchronized horizontal/vertical flips, 90-degree rotations, and mild
+brightness/contrast changes to training images and masks only. Validation and
+test images are never augmented. Use `--balanced_sampling` to sample images
+containing rare classes more frequently; weights use a capped inverse-square-
+root frequency ratio and default to a maximum of 5.0. Every run saves all CLI
+settings to `training_config.json`.
+
+For controlled comparisons, keep the split, seed, learning rate, and early-
+stopping settings fixed:
+
+```bash
+# Augmentation only
+python train.py ... \
+  --augmentation basic \
+  --seed 42 \
+  --output_dir runs/augmentation_basic
+
+# Augmentation plus class-balanced image sampling
+python train.py ... \
+  --augmentation basic \
+  --balanced_sampling \
+  --balanced_sampling_max_weight 5 \
+  --seed 42 \
+  --output_dir runs/augmentation_balanced
+```
 
 Evaluate any saved metadata checkpoint without retraining:
 
