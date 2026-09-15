@@ -15,6 +15,7 @@ from utils.metrics_logger import (
     append_class_metrics_csv,
     init_class_metrics_csv,
     save_class_ap_plot,
+    save_class_metrics_table,
 )
 
 
@@ -84,7 +85,6 @@ def main():
 
     print("Running COCO bbox evaluation...")
     bbox_metrics = evaluate_coco_bbox(model, data_loader, device, score_thresh=0.0)
-    print_class_metrics(bbox_metrics, "bbox")
 
     print("Running COCO segm evaluation...")
     segm_metrics = evaluate_coco_segm(
@@ -94,7 +94,7 @@ def main():
         score_thresh=0.0,
         mask_thresh=args.eval_mask_thresh,
     )
-    print_class_metrics(segm_metrics, "segm")
+    print_class_metrics(bbox_metrics, segm_metrics)
 
     class_metrics_path = init_class_metrics_csv(args.output_dir)
     append_class_metrics_csv(
@@ -104,6 +104,12 @@ def main():
         segm_metrics,
     )
     plot_path = save_class_ap_plot(
+        args.output_dir,
+        epoch,
+        bbox_metrics,
+        segm_metrics,
+    )
+    table_path = save_class_metrics_table(
         args.output_dir,
         epoch,
         bbox_metrics,
@@ -126,6 +132,8 @@ def main():
     print(f"Saved: {summary_path}")
     if plot_path is not None:
         print(f"Saved: {plot_path}")
+    if table_path is not None:
+        print(f"Saved: {table_path}")
 
 
 if __name__ == "__main__":
