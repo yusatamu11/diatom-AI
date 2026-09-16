@@ -1,4 +1,4 @@
-"""Evaluate a saved project Mask R-CNN checkpoint on a COCO validation set."""
+"""Evaluate a saved project Mask R-CNN checkpoint on a COCO dataset."""
 
 import argparse
 import json
@@ -8,7 +8,12 @@ import torch
 from torch.utils.data import DataLoader
 
 from models.maskrcnn import get_model
-from train import collate_fn, evaluate_coco_bbox, evaluate_coco_segm, print_class_metrics
+from train import (
+    collate_fn,
+    evaluate_coco_bbox,
+    evaluate_coco_segm,
+    print_class_metrics,
+)
 from utils.checkpoint import load_training_checkpoint
 from utils.dataset import CocoDiatomDataset
 from utils.metrics_logger import (
@@ -16,6 +21,12 @@ from utils.metrics_logger import (
     init_class_metrics_csv,
     save_class_ap_plot,
     save_class_metrics_table,
+)
+from utils.threshold_metrics import (
+    evaluate_threshold_metrics,
+    make_score_thresholds,
+    print_threshold_summary,
+    save_threshold_metrics,
 )
 
 
@@ -28,6 +39,28 @@ def get_args():
     parser.add_argument("--device", default=None, help="For example cuda:0 or cpu")
     parser.add_argument("--batch_size", type=int, default=1)
     parser.add_argument("--eval_mask_thresh", type=float, default=0.5)
+    parser.add_argument(
+        "--threshold_mode",
+        choices=["none", "sweep", "fixed"],
+        default="none",
+        help="Sweep validation thresholds or evaluate one fixed test threshold",
+    )
+    parser.add_argument(
+        "--score_thresh",
+        type=float,
+        default=None,
+        help="Confidence threshold required by --threshold_mode fixed",
+    )
+    parser.add_argument("--threshold_start", type=float, default=0.05)
+    parser.add_argument("--threshold_stop", type=float, default=0.95)
+    parser.add_argument("--threshold_step", type=float, default=0.05)
+    parser.add_argument("--match_iou_thresh", type=float, default=0.5)
+    parser.add_argument(
+        "--threshold_selection_metric",
+        choices=["macro_f1", "micro_f1"],
+        default="macro_f1",
+        help="Validation-only score-threshold selection criterion",
+    )
     return parser.parse_args()
 
 
@@ -51,6 +84,11 @@ def json_ready(metrics):
 
 def main():
     args = get_args()
+    if args.threshold_mode == "fixed" and args.score_thresh is None:
+        raise ValueError("--score_thresh is required for --threshold_mode fixed")
+    if args.score_thresh is not None and not 0.0 <= args.score_thresh <= 1.0:
+        raise ValueError("--score_thresh must be between 0 and 1")
+
     os.makedirs(args.output_dir, exist_ok=True)
     device = resolve_device(args.device)
     print(f"Device: {device}")
@@ -96,6 +134,46 @@ def main():
     )
     print_class_metrics(bbox_metrics, segm_metrics)
 
+    threshold_outputs = None
+    if args.threshold_mode != "none":
+        if args.threshold_mode == "sweep":
+            score_thresholds = make_score_thresholds(
+                args.threshold_start,
+                args.threshold_stop,
+                args.threshold_step,
+            )
+            print(
+                "Running validation threshold sweep: "
+                f"{score_thresholds[0]:.2f}-{score_thresholds[-1]:.2f}"
+            )
+        else:
+            score_thresholds = [args.score_thresh]
+            print(f"Running fixed test threshold evaluation: {args.score_thresh:.2f}")
+
+        threshold_results = evaluate_threshold_metrics(
+            model,
+            data_loader,
+            device,
+            dataset.category_names,
+            score_thresholds,
+            match_iou_threshold=args.match_iou_thresh,
+            mask_threshold=args.eval_mask_thresh,
+        )
+        threshold_csv_path, threshold_summary_path, threshold_summary = (
+            save_threshold_metrics(
+                threshold_results,
+                args.output_dir,
+                args.threshold_mode,
+                selection_metric=args.threshold_selection_metric,
+            )
+        )
+        print_threshold_summary(threshold_summary)
+        threshold_outputs = {
+            "mode": args.threshold_mode,
+            "csv": os.path.abspath(threshold_csv_path),
+            "summary": os.path.abspath(threshold_summary_path),
+        }
+
     class_metrics_path = init_class_metrics_csv(args.output_dir)
     append_class_metrics_csv(
         class_metrics_path,
@@ -123,6 +201,7 @@ def main():
                 "epoch": epoch,
                 "bbox": json_ready(bbox_metrics),
                 "segm": json_ready(segm_metrics),
+                "threshold_evaluation": threshold_outputs,
             },
             file,
             ensure_ascii=False,
@@ -134,6 +213,9 @@ def main():
         print(f"Saved: {plot_path}")
     if table_path is not None:
         print(f"Saved: {table_path}")
+    if threshold_outputs is not None:
+        print(f"Saved: {threshold_outputs['csv']}")
+        print(f"Saved: {threshold_outputs['summary']}")
 
 
 if __name__ == "__main__":
