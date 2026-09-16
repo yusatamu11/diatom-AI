@@ -14,6 +14,7 @@ from utils.checkpoint import make_training_checkpoint
 from utils.dataset import (
     BasicDiatomAugmentation,
     CocoDiatomDataset,
+    StrongDiatomAugmentation,
     make_class_balanced_sample_weights,
 )
 from utils.metrics_logger import (
@@ -405,7 +406,7 @@ def get_args():
 
     parser.add_argument(
         "--augmentation",
-        choices=["none", "basic"],
+        choices=["none", "basic", "strong"],
         default="none",
         help="Training-only synchronized image/mask augmentation",
     )
@@ -520,9 +521,12 @@ def main():
     print("Device:", device)
 
     # Dataset
-    train_transform = (
-        BasicDiatomAugmentation() if args.augmentation == "basic" else None
-    )
+    train_transforms = {
+        "none": None,
+        "basic": BasicDiatomAugmentation(),
+        "strong": StrongDiatomAugmentation(),
+    }
+    train_transform = train_transforms[args.augmentation]
     train_dataset = CocoDiatomDataset(
         args.image_dir,
         args.ann_file,

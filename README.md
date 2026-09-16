@@ -67,11 +67,13 @@ epoch is still checkpointed and logged before training stops.
 
 Training augmentation is disabled by default. Use `--augmentation basic` to
 apply synchronized horizontal/vertical flips, 90-degree rotations, and mild
-brightness/contrast changes to training images and masks only. Validation and
-test images are never augmented. Use `--balanced_sampling` to sample images
-containing rare classes more frequently; weights use a capped inverse-square-
-root frequency ratio and default to a maximum of 5.0. Every run saves all CLI
-settings to `training_config.json`.
+brightness/contrast changes to training images and masks only. Use
+`--augmentation strong` for the same geometry with stronger brightness and
+contrast changes plus mild gamma, Gaussian blur, and Gaussian noise variation.
+Validation and test images are never augmented. Use `--balanced_sampling` to
+sample images containing rare classes more frequently; weights use a capped
+inverse-square-root frequency ratio and default to a maximum of 5.0. Every run
+saves all CLI settings to `training_config.json`.
 
 For controlled comparisons, keep the split, seed, learning rate, and early-
 stopping settings fixed:
@@ -82,6 +84,12 @@ python train.py ... \
   --augmentation basic \
   --seed 42 \
   --output_dir runs/augmentation_basic
+
+# Stronger augmentation only
+python train.py ... \
+  --augmentation strong \
+  --seed 42 \
+  --output_dir runs/augmentation_strong
 
 # Augmentation plus class-balanced image sampling
 python train.py ... \

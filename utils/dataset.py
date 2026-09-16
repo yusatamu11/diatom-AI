@@ -59,6 +59,51 @@ class BasicDiatomAugmentation:
         return image, target
 
 
+class StrongDiatomAugmentation(BasicDiatomAugmentation):
+    """Apply stronger, microscopy-safe photometric augmentation."""
+
+    def __init__(
+        self,
+        brightness=0.20,
+        contrast=0.20,
+        gamma_range=(0.85, 1.15),
+        blur_probability=0.20,
+        noise_probability=0.20,
+        noise_std=0.02,
+    ):
+        super().__init__(brightness=brightness, contrast=contrast)
+        self.gamma_range = gamma_range
+        self.blur_probability = blur_probability
+        self.noise_probability = noise_probability
+        self.noise_std = noise_std
+
+    def __call__(self, image, target):
+        image, target = super().__call__(image, target)
+
+        gamma_min, gamma_max = self.gamma_range
+        gamma = gamma_min + float(torch.rand(()).item()) * (
+            gamma_max - gamma_min
+        )
+        image = F.adjust_gamma(image, gamma)
+
+        if torch.rand(()) < self.blur_probability:
+            sigma = 0.3 + float(torch.rand(()).item()) * 0.7
+            image = F.gaussian_blur(
+                image,
+                kernel_size=[5, 5],
+                sigma=[sigma, sigma],
+            )
+
+        if torch.rand(()) < self.noise_probability:
+            image = torch.clamp(
+                image + torch.randn_like(image) * self.noise_std,
+                min=0.0,
+                max=1.0,
+            )
+
+        return image, target
+
+
 def _rebuild_boxes_and_areas(target):
     """Rebuild boxes from transformed masks and discard any empty masks."""
     masks = target["masks"]
