@@ -70,6 +70,12 @@ apply synchronized horizontal/vertical flips, 90-degree rotations, and mild
 brightness/contrast changes to training images and masks only. Use
 `--augmentation strong` for the same geometry with stronger brightness and
 contrast changes plus mild gamma, Gaussian blur, and Gaussian noise variation.
+Use `--augmentation basic_copy_paste` to select a foreground class uniformly,
+paste one CVAT-annotated training instance from that class into a training
+image, and then apply the basic augmentation. Copy-Paste uses training
+annotations only and is never applied to validation or test data. By default it
+is applied to 30% of training images, permits at most 10% of the pasted mask to
+overlap existing masks, and adds at most one instance per image.
 Validation and test images are never augmented. Use `--balanced_sampling` to
 sample images containing rare classes more frequently; weights use a capped
 inverse-square-root frequency ratio and default to a maximum of 5.0. Every run
@@ -91,6 +97,16 @@ python train.py ... \
   --seed 42 \
   --output_dir runs/augmentation_strong
 
+# Basic augmentation plus class-uniform Copy-Paste only
+python train.py ... \
+  --augmentation basic_copy_paste \
+  --copy_paste_probability 0.3 \
+  --copy_paste_max_instances 1 \
+  --copy_paste_max_overlap 0.1 \
+  --copy_paste_placement_attempts 20 \
+  --seed 42 \
+  --output_dir runs/augmentation_basic_copy_paste
+
 # Augmentation plus class-balanced image sampling
 python train.py ... \
   --augmentation basic \
@@ -100,15 +116,40 @@ python train.py ... \
   --output_dir runs/augmentation_balanced
 ```
 
-Evaluate any saved metadata checkpoint without retraining:
+Evaluate any saved metadata checkpoint without retraining. COCO AP/AR is
+always evaluated without an additional confidence cutoff. To select one
+operating confidence threshold, sweep only the validation set:
 
 ```bash
 python evaluate_checkpoint.py \
   --image_dir /path/to/dataset/validation/images \
   --ann_file /path/to/dataset/validation/annotations.json \
-  --checkpoint runs/experiment_name/maskrcnn_epoch_1.pth \
-  --output_dir runs/experiment_name/evaluation_epoch_1
+  --checkpoint runs/experiment_name/best_model.pth \
+  --output_dir runs/experiment_name/validation_thresholds \
+  --threshold_mode sweep \
+  --threshold_selection_metric macro_f1 \
+  --match_iou_thresh 0.5
 ```
+
+The sweep saves `threshold_metrics.csv` with class-wise and micro/macro
+TP, FP, FN, precision, recall, and F1, plus `threshold_summary.json` containing
+the selected bbox and segmentation thresholds. Freeze the selected validation
+segmentation threshold before evaluating the test set:
+
+```bash
+python evaluate_checkpoint.py \
+  --image_dir /path/to/dataset/test/images \
+  --ann_file /path/to/dataset/test/annotations.json \
+  --checkpoint runs/experiment_name/best_model.pth \
+  --output_dir runs/experiment_name/test_evaluation \
+  --threshold_mode fixed \
+  --score_thresh 0.50 \
+  --match_iou_thresh 0.5
+```
+
+Replace `0.50` with the segmentation threshold selected on validation. Never
+retune the threshold from test results. Mask binarization remains controlled
+separately by `--eval_mask_thresh`, whose default is 0.5.
 
 ## Prediction post-processing
 

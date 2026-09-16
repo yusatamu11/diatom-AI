@@ -13,6 +13,7 @@ from models.maskrcnn import get_model
 from utils.checkpoint import make_training_checkpoint
 from utils.dataset import (
     BasicDiatomAugmentation,
+    ClassUniformCopyPasteAugmentation,
     CocoDiatomDataset,
     StrongDiatomAugmentation,
     make_class_balanced_sample_weights,
@@ -406,9 +407,37 @@ def get_args():
 
     parser.add_argument(
         "--augmentation",
-        choices=["none", "basic", "strong"],
+        choices=["none", "basic", "strong", "basic_copy_paste"],
         default="none",
         help="Training-only synchronized image/mask augmentation",
+    )
+
+    parser.add_argument(
+        "--copy_paste_probability",
+        type=float,
+        default=0.30,
+        help="Probability of applying class-uniform Copy-Paste to a train image",
+    )
+
+    parser.add_argument(
+        "--copy_paste_max_instances",
+        type=int,
+        default=1,
+        help="Maximum number of donor instances pasted into one train image",
+    )
+
+    parser.add_argument(
+        "--copy_paste_max_overlap",
+        type=float,
+        default=0.10,
+        help="Maximum pasted-mask fraction allowed to overlap existing masks",
+    )
+
+    parser.add_argument(
+        "--copy_paste_placement_attempts",
+        type=int,
+        default=20,
+        help="Random placement attempts per Copy-Paste donor instance",
     )
 
     parser.add_argument(
@@ -503,6 +532,14 @@ def main():
         raise ValueError("--early_stopping_min_delta must be 0 or greater")
     if args.balanced_sampling_max_weight < 1.0:
         raise ValueError("--balanced_sampling_max_weight must be 1.0 or greater")
+    if not 0.0 <= args.copy_paste_probability <= 1.0:
+        raise ValueError("--copy_paste_probability must be between 0 and 1")
+    if args.copy_paste_max_instances < 1:
+        raise ValueError("--copy_paste_max_instances must be at least 1")
+    if not 0.0 <= args.copy_paste_max_overlap <= 1.0:
+        raise ValueError("--copy_paste_max_overlap must be between 0 and 1")
+    if args.copy_paste_placement_attempts < 1:
+        raise ValueError("--copy_paste_placement_attempts must be at least 1")
 
     seed_everything(args.seed)
     
@@ -526,12 +563,20 @@ def main():
         "basic": BasicDiatomAugmentation(),
         "strong": StrongDiatomAugmentation(),
     }
-    train_transform = train_transforms[args.augmentation]
     train_dataset = CocoDiatomDataset(
         args.image_dir,
         args.ann_file,
-        transform=train_transform,
+        transform=train_transforms.get(args.augmentation),
     )
+    if args.augmentation == "basic_copy_paste":
+        train_dataset.transform = ClassUniformCopyPasteAugmentation(
+            image_dir=args.image_dir,
+            coco=train_dataset.coco,
+            probability=args.copy_paste_probability,
+            max_instances=args.copy_paste_max_instances,
+            max_overlap=args.copy_paste_max_overlap,
+            placement_attempts=args.copy_paste_placement_attempts,
+        )
     num_classes = train_dataset.num_classes
     print(f"Model classes (including background): {num_classes}")
     print(f"Foreground categories: {train_dataset.category_names}")
@@ -569,6 +614,19 @@ def main():
         )
 
     print(f"Training augmentation: {args.augmentation}")
+    if args.augmentation == "basic_copy_paste":
+        print(
+            "Class-uniform Copy-Paste: "
+            f"probability={args.copy_paste_probability}, "
+            f"max_instances={args.copy_paste_max_instances}, "
+            f"max_overlap={args.copy_paste_max_overlap}, "
+            f"placement_attempts={args.copy_paste_placement_attempts}"
+        )
+        if args.balanced_sampling:
+            print(
+                "Warning: balanced sampling and Copy-Paste are both enabled; "
+                "disable --balanced_sampling for an isolated Copy-Paste experiment."
+            )
     print(f"Random seed: {args.seed}")
 
     # DataLoader for training
