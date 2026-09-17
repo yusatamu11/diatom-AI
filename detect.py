@@ -135,6 +135,7 @@ def main():
             masks=masks.detach().cpu(),
             output_path=args.output.replace(".pt", ".jpg"),
             show_masks=args.show_masks,
+            class_names=class_names,
         )
 
     print("Detections:", len(scores))

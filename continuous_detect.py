@@ -157,6 +157,7 @@ def main():
                 masks=masks.detach().cpu(),
                 output_path=output_path.with_suffix(".jpg"),#with_suffixで拡張子を変更できる
                 show_masks=args.show_masks,
+                class_names=class_names,
             )
             
     if args.archive != "none":
