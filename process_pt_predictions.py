@@ -21,6 +21,7 @@ from process_json_predictions import (
     parse_tile_xy,
     remove_adjacent_duplicates,
 )
+from utils.compact_masks import MASK_FORMAT
 
 
 def get_args():
@@ -106,13 +107,49 @@ def _validate_prediction(prediction, path):
     """Validate the fields and leading dimensions of one prediction dictionary."""
     if not isinstance(prediction, dict):
         raise TypeError(f"Prediction must be a dictionary: {path}")
-    required = ("boxes", "labels", "scores", "masks")
+    required = ("boxes", "labels", "scores")
     missing = [key for key in required if key not in prediction]
     if missing:
         raise KeyError(f"Missing {', '.join(missing)} in prediction: {path}")
-    lengths = {key: len(prediction[key]) for key in required}
+    if prediction.get("mask_format") == MASK_FORMAT:
+        mask_keys = ("mask_crops", "mask_origins_xy")
+    else:
+        mask_keys = ("masks",)
+    missing = [key for key in mask_keys if key not in prediction]
+    if missing:
+        raise KeyError(f"Missing {', '.join(missing)} in prediction: {path}")
+    lengths = {key: len(prediction[key]) for key in (*required, *mask_keys)}
     if len(set(lengths.values())) != 1:
         raise ValueError(f"Prediction fields have different lengths in {path}: {lengths}")
+
+
+def _load_masks(prediction, path, mask_thresh):
+    """Load legacy full masks or compact cropped masks with their origins."""
+    if prediction.get("mask_format") == MASK_FORMAT:
+        stored_threshold = float(prediction.get("mask_threshold", 0.5))
+        if not math.isclose(mask_thresh, stored_threshold, abs_tol=1e-9):
+            raise ValueError(
+                f"Compact masks in {path} were stored at threshold "
+                f"{stored_threshold}; requested mask_thresh={mask_thresh}. "
+                "Re-run inference to change the mask threshold."
+            )
+        crops = prediction["mask_crops"]
+        origins = prediction["mask_origins_xy"]
+        if getattr(origins, "ndim", None) != 2 or origins.shape[1] != 2:
+            raise ValueError(f"mask_origins_xy must have shape [N,2] in {path}")
+        return [crop.to(torch.bool) for crop in crops], origins.to(torch.int64)
+
+    masks = prediction["masks"].detach().cpu()
+    if masks.ndim == 4 and masks.shape[1] == 1:
+        masks = masks[:, 0]
+    if masks.ndim != 3:
+        raise ValueError(
+            f"Expected masks with shape [N,H,W] or [N,1,H,W], got "
+            f"{tuple(masks.shape)} in {path}"
+        )
+    masks = masks >= mask_thresh
+    origins = torch.zeros((len(masks), 2), dtype=torch.int64)
+    return list(masks), origins
 
 
 def load_pt_tiles(prediction_dir, tile_size, overlap, mask_thresh, class_map=None):
@@ -140,15 +177,9 @@ def load_pt_tiles(prediction_dir, tile_size, overlap, mask_thresh, class_map=Non
         boxes = prediction["boxes"].detach().cpu().to(torch.float32)
         labels = prediction["labels"].detach().cpu().to(torch.int64)
         scores = prediction["scores"].detach().cpu().to(torch.float32)
-        masks = prediction["masks"].detach().cpu()
-        if masks.ndim == 4 and masks.shape[1] == 1:
-            masks = masks[:, 0]
-        if masks.ndim != 3:
-            raise ValueError(
-                f"Expected masks with shape [N,H,W] or [N,1,H,W], got "
-                f"{tuple(masks.shape)} in {prediction_path}"
-            )
-        masks = masks >= mask_thresh
+        masks, mask_origins_xy = _load_masks(
+            prediction, prediction_path, mask_thresh
+        )
 
         origin_x = (tile_x - 1) * stride
         origin_y = (tile_y - 1) * stride
@@ -174,6 +205,8 @@ def load_pt_tiles(prediction_dir, tile_size, overlap, mask_thresh, class_map=Non
                 "local_bbox_xyxy": local_box,
                 "global_bbox_xyxy": global_box,
                 "local_mask": masks[index],
+                "mask_origin_x": origin_x + int(mask_origins_xy[index, 0]),
+                "mask_origin_y": origin_y + int(mask_origins_xy[index, 1]),
                 "source_image": str(
                     prediction.get("image_path", prediction_path.name)
                 ),
@@ -244,8 +277,8 @@ def build_morphology_rows(instances):
         height = max(0.0, box[3] - box[1])
         morphology = mask_morphology(
             instance["local_mask"],
-            origin_x=instance["tile_origin_x"],
-            origin_y=instance["tile_origin_y"],
+            origin_x=instance["mask_origin_x"],
+            origin_y=instance["mask_origin_y"],
         )
         morphology_valid = not math.isnan(morphology["area"])
         axis_length_calculated = (
@@ -315,6 +348,8 @@ def save_merged_pt(instances, output_path, metadata):
                 instance["global_bbox_xyxy"], dtype=torch.float32
             ),
             "mask": instance["local_mask"].to(torch.bool),
+            "mask_origin_x": instance["mask_origin_x"],
+            "mask_origin_y": instance["mask_origin_y"],
             "source_image": instance["source_image"],
             "source_tile_x": instance["source_tile_x"],
             "source_tile_y": instance["source_tile_y"],

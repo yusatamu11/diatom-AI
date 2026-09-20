@@ -156,6 +156,23 @@ separately by `--eval_mask_thresh`, whose default is 0.5.
 ### PyTorch prediction files (`.pt`)
 
 The `.pt` files written by `continuous_detect.py` can be analyzed directly.
+New predictions store each mask as a cropped binary `uint8` tensor rather than
+a full-tile floating-point tensor. The default `--mask_thresh 0.5` is applied
+when the prediction is saved, so use the same threshold chosen for the
+workflow. Changing the mask threshold later requires rerunning inference.
+Legacy `.pt` files containing full floating-point masks remain supported.
+
+For compact prediction-only output, omit `--save_image`:
+
+```bash
+python continuous_detect.py \
+  --image_dir /path/to/sample/images \
+  --weights /path/to/best_model.pth \
+  --score_thresh 0.65 \
+  --mask_thresh 0.5 \
+  --output_dir /path/to/sample/infer_pt
+```
+
 For one sample, merge overlapping tiles, remove duplicate detections, measure
 the original binary masks, and write an instance-level CSV:
 

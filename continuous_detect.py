@@ -19,6 +19,11 @@ from models.maskrcnn import get_model
 from utils.checkpoint import load_training_checkpoint
 from utils.visualize import save_visualization
 from utils.archive import archive_directory
+from utils.compact_masks import (
+    MASK_FORMAT,
+    encode_cropped_binary_masks,
+    restore_full_binary_masks,
+)
 
 from pathlib import Path #detect.pyと違う．一気に画像を取得可能
 
@@ -53,6 +58,13 @@ def get_args():
         type=float,
         default=0.5,
         help="Score threshold for detections",
+    )
+
+    parser.add_argument(
+        "--mask_thresh",
+        type=float,
+        default=0.5,
+        help="Threshold used to store compact binary masks",
     )
 
     parser.add_argument(
@@ -108,6 +120,9 @@ def main():
     model.load_state_dict(state_dict)
     model.to(device)
     model.eval()
+    # Apply the requested threshold before the mask head so low-confidence
+    # detections do not incur mask-generation and storage costs.
+    model.roi_heads.score_thresh = args.score_thresh
     
     
     for i, image_path in enumerate(image_paths, start=1):
@@ -117,7 +132,7 @@ def main():
         image_tensor = F.to_tensor(image).to(device)
         
         # 推論
-        with torch.no_grad():
+        with torch.inference_mode():
             outputs = model([image_tensor])
 
         output = outputs[0]
@@ -129,6 +144,10 @@ def main():
         labels = output["labels"][keep]
         masks = output["masks"][keep]
         scores = scores[keep]
+
+        mask_crops, mask_origins_xy = encode_cropped_binary_masks(
+            masks, threshold=args.mask_thresh
+        )
         
         stem = image_path.stem#stemはPathオブジェクトが持っている拡張子を除いたファイル名を取得する
 
@@ -138,7 +157,14 @@ def main():
             "boxes": boxes.detach().cpu(),
             "labels": labels.detach().cpu(),
             "scores": scores.detach().cpu(),
-            "masks": masks.detach().cpu(),
+            "format": "diatom-ai-tile-prediction-v2",
+            "mask_format": MASK_FORMAT,
+            "mask_threshold": args.mask_thresh,
+            "mask_crops": mask_crops,
+            "mask_origins_xy": mask_origins_xy,
+            "mask_canvas_size_hw": torch.tensor(
+                image_tensor.shape[-2:], dtype=torch.int32
+            ),
             "image_path": str(image_path),
             "class_names": class_names,
             "checkpoint_format": checkpoint_metadata["format"],
@@ -154,7 +180,11 @@ def main():
                 boxes=boxes.detach().cpu(),
                 labels=labels.detach().cpu(),
                 scores=scores.detach().cpu(),
-                masks=masks.detach().cpu(),
+                masks=restore_full_binary_masks(
+                    mask_crops,
+                    mask_origins_xy,
+                    image_tensor.shape[-2:],
+                ),
                 output_path=output_path.with_suffix(".jpg"),#with_suffixで拡張子を変更できる
                 show_masks=args.show_masks,
                 class_names=class_names,
