@@ -465,6 +465,44 @@ def get_args():
         type=float,
         default=0.005,
     )
+
+    parser.add_argument(
+        "--lr_scheduler",
+        choices=["none", "plateau"],
+        default="none",
+        help=(
+            "Learning-rate schedule; plateau reduces LR when validation segm "
+            "AP stops improving"
+        ),
+    )
+
+    parser.add_argument(
+        "--lr_scheduler_factor",
+        type=float,
+        default=0.2,
+        help="Multiplicative LR reduction used by the plateau scheduler",
+    )
+
+    parser.add_argument(
+        "--lr_scheduler_patience",
+        type=int,
+        default=5,
+        help="Validation epochs without segm AP improvement before reducing LR",
+    )
+
+    parser.add_argument(
+        "--lr_scheduler_threshold",
+        type=float,
+        default=0.001,
+        help="Minimum absolute segm AP improvement recognized by the scheduler",
+    )
+
+    parser.add_argument(
+        "--lr_scheduler_min_lr",
+        type=float,
+        default=1e-6,
+        help="Minimum learning rate used by the plateau scheduler",
+    )
     
     parser.add_argument(
         "--val_image_dir",
@@ -524,6 +562,22 @@ def get_args():
 def main():
     args = get_args()
 
+    if args.lr <= 0:
+        raise ValueError("--lr must be greater than 0")
+    if not 0.0 < args.lr_scheduler_factor < 1.0:
+        raise ValueError("--lr_scheduler_factor must be between 0 and 1")
+    if args.lr_scheduler_patience < 0:
+        raise ValueError("--lr_scheduler_patience must be 0 or greater")
+    if args.lr_scheduler_threshold < 0:
+        raise ValueError("--lr_scheduler_threshold must be 0 or greater")
+    if args.lr_scheduler_min_lr < 0:
+        raise ValueError("--lr_scheduler_min_lr must be 0 or greater")
+    if args.lr_scheduler == "plateau" and (
+        args.val_image_dir is None or args.val_ann_file is None
+    ):
+        raise ValueError(
+            "--lr_scheduler plateau requires --val_image_dir and --val_ann_file"
+        )
     if args.early_stopping_patience < 0:
         raise ValueError("--early_stopping_patience must be 0 or greater")
     if args.early_stopping_min_epochs < 1:
@@ -674,7 +728,28 @@ def main():
         momentum=0.9,
         weight_decay=0.0005,
     )
-    
+
+    lr_scheduler = None
+    if args.lr_scheduler == "plateau":
+        lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer,
+            mode="max",
+            factor=args.lr_scheduler_factor,
+            patience=args.lr_scheduler_patience,
+            threshold=args.lr_scheduler_threshold,
+            threshold_mode="abs",
+            min_lr=args.lr_scheduler_min_lr,
+        )
+        print(
+            "LR scheduler enabled: "
+            "type=ReduceLROnPlateau, metric=segm AP, "
+            f"factor={args.lr_scheduler_factor}, "
+            f"patience={args.lr_scheduler_patience}, "
+            f"threshold={args.lr_scheduler_threshold}, "
+            f"min_lr={args.lr_scheduler_min_lr}"
+        )
+    else:
+        print("LR scheduler disabled (--lr_scheduler=none).")
     
     best_segm_ap = float("-inf")
     early_stopping_best = None
@@ -697,6 +772,8 @@ def main():
     # Training
     for epoch in range(args.epochs):
         model.train()
+        epoch_learning_rate = float(optimizer.param_groups[0]["lr"])
+        print(f"Epoch {epoch + 1} learning rate: {epoch_learning_rate:.8g}")
 
         val_loss = None
         val_loss_components = None
@@ -782,6 +859,18 @@ def main():
 
             print_class_metrics(bbox_metrics, segm_metrics)
 
+            if lr_scheduler is not None and segm_metrics is not None:
+                previous_lr = float(optimizer.param_groups[0]["lr"])
+                lr_scheduler.step(segm_metrics["AP"])
+                next_lr = float(optimizer.param_groups[0]["lr"])
+                if next_lr < previous_lr:
+                    print(
+                        "Learning rate reduced after validation: "
+                        f"{previous_lr:.8g} -> {next_lr:.8g}"
+                    )
+                else:
+                    print(f"Next epoch learning rate: {next_lr:.8g}")
+
         save_path = os.path.join(
             args.output_dir,
             f"maskrcnn_epoch_{epoch + 1}.pth"
@@ -834,6 +923,7 @@ def main():
         append_metrics_csv(
             metrics_csv_path=metrics_csv_path,
             epoch=epoch + 1,
+            learning_rate=epoch_learning_rate,
             train_loss=avg_loss,
             val_loss=val_loss,
             train_loss_components=train_loss_components,

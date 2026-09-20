@@ -151,6 +151,35 @@ Replace `0.50` with the segmentation threshold selected on validation. Never
 retune the threshold from test results. Mask binarization remains controlled
 separately by `--eval_mask_thresh`, whose default is 0.5.
 
+### Learning-rate scheduling
+
+Training uses SGD with momentum. The default learning rate remains fixed for
+backward compatibility. To reduce it automatically when validation segmentation
+AP stops improving, enable the plateau scheduler:
+
+```bash
+python train.py \
+  --image_dir /path/to/dataset/train/images \
+  --ann_file /path/to/dataset/train/annotations.json \
+  --val_image_dir /path/to/dataset/validation/images \
+  --val_ann_file /path/to/dataset/validation/annotations.json \
+  --epochs 100 \
+  --batch_size 2 \
+  --augmentation basic_copy_paste \
+  --lr 0.005 \
+  --lr_scheduler plateau \
+  --lr_scheduler_factor 0.2 \
+  --lr_scheduler_patience 5 \
+  --lr_scheduler_threshold 0.001 \
+  --lr_scheduler_min_lr 0.000001 \
+  --early_stopping_patience 15 \
+  --output_dir runs/sgd_plateau
+```
+
+The scheduler monitors validation `segm AP` in `max` mode. `metrics.csv` records
+the learning rate actually used for each epoch, while `training_config.json`
+records all scheduler arguments.
+
 ## Prediction post-processing
 
 ### PyTorch prediction files (`.pt`)

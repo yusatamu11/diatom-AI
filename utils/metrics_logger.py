@@ -23,6 +23,7 @@ import numpy as np
 # COCOevalでよく見る AP / AP50 / AP75 / size別AP をbboxとsegmの両方で保存する。
 CSV_HEADER = [
     "epoch",
+    "learning_rate",
     "train_loss",
     "train_loss_classifier",
     "train_loss_box_reg",
@@ -313,6 +314,7 @@ def save_class_metrics_table(output_dir, epoch, bbox_metrics, segm_metrics):
 def append_metrics_csv(
     metrics_csv_path,
     epoch,
+    learning_rate,
     train_loss,
     val_loss,
     bbox_metrics,
@@ -328,6 +330,7 @@ def append_metrics_csv(
         writer.writerow(
             [
                 epoch,
+                learning_rate,
                 train_loss,
                 _loss_component(train_loss_components, "loss_classifier"),
                 _loss_component(train_loss_components, "loss_box_reg"),
