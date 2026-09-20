@@ -170,8 +170,16 @@ python continuous_detect.py \
   --weights /path/to/best_model.pth \
   --score_thresh 0.65 \
   --mask_thresh 0.5 \
+  --batch_size 2 \
+  --num_workers 2 \
   --output_dir /path/to/sample/infer_pt
 ```
+
+`--batch_size` controls how many images are sent through the model together,
+while `--num_workers` controls parallel CPU image loading. Their defaults are
+`1` and `0`, respectively, which preserves the original serial behavior. Start
+with `--batch_size 2 --num_workers 2` on Colab and reduce the batch size to 1
+if GPU memory is insufficient.
 
 For one sample, merge overlapping tiles, remove duplicate detections, measure
 the original binary masks, and write an instance-level CSV:
