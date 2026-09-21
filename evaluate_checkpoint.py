@@ -16,6 +16,10 @@ from train import (
 )
 from utils.checkpoint import load_training_checkpoint
 from utils.coco_pr import save_coco_pr_outputs
+from utils.confusion_matrix import (
+    evaluate_confusion_matrices,
+    save_confusion_matrix_outputs,
+)
 from utils.dataset import CocoDiatomDataset
 from utils.metrics_logger import (
     append_class_metrics_csv,
@@ -46,6 +50,14 @@ def get_args():
         help=(
             "Save COCO 101-point overall and class-wise PR curves as "
             "PNG/PDF/SVG plus CSV"
+        ),
+    )
+    parser.add_argument(
+        "--save_confusion_matrix",
+        action="store_true",
+        help=(
+            "Save bbox/segmentation confusion matrices with background FP/FN "
+            "bins; requires --score_thresh"
         ),
     )
     parser.add_argument(
@@ -97,6 +109,10 @@ def main():
         raise ValueError("--score_thresh is required for --threshold_mode fixed")
     if args.score_thresh is not None and not 0.0 <= args.score_thresh <= 1.0:
         raise ValueError("--score_thresh must be between 0 and 1")
+    if args.save_confusion_matrix and args.score_thresh is None:
+        raise ValueError(
+            "--score_thresh is required by --save_confusion_matrix"
+        )
 
     os.makedirs(args.output_dir, exist_ok=True)
     device = resolve_device(args.device)
@@ -208,6 +224,27 @@ def main():
             "summary": os.path.abspath(threshold_summary_path),
         }
 
+    confusion_matrix_outputs = None
+    if args.save_confusion_matrix:
+        print(
+            "Running confusion-matrix evaluation: "
+            f"score threshold={args.score_thresh:.2f}, "
+            f"IoU={args.match_iou_thresh:.2f}"
+        )
+        confusion_matrix_results = evaluate_confusion_matrices(
+            model,
+            data_loader,
+            device,
+            dataset.category_names,
+            score_threshold=args.score_thresh,
+            match_iou_threshold=args.match_iou_thresh,
+            mask_threshold=args.eval_mask_thresh,
+        )
+        confusion_matrix_outputs = save_confusion_matrix_outputs(
+            confusion_matrix_results,
+            args.output_dir,
+        )
+
     class_metrics_path = init_class_metrics_csv(args.output_dir)
     append_class_metrics_csv(
         class_metrics_path,
@@ -237,6 +274,7 @@ def main():
                 "segm": json_ready(segm_metrics),
                 "coco_pr": coco_pr_outputs,
                 "threshold_evaluation": threshold_outputs,
+                "confusion_matrix": confusion_matrix_outputs,
             },
             file,
             ensure_ascii=False,
@@ -259,6 +297,12 @@ def main():
             print(f"  {outputs['csv']}")
             for group in ("overall", "per_class"):
                 for path in outputs[group].values():
+                    print(f"  {path}")
+    if confusion_matrix_outputs is not None:
+        for evaluation_type, groups in confusion_matrix_outputs.items():
+            print(f"Saved confusion-matrix outputs ({evaluation_type}):")
+            for group in ("counts", "normalized"):
+                for path in groups[group].values():
                     print(f"  {path}")
 
 

@@ -169,6 +169,26 @@ Replace `0.50` with the segmentation threshold selected on validation. Never
 retune the threshold from test results. Mask binarization remains controlled
 separately by `--eval_mask_thresh`, whose default is 0.5.
 
+Add `--save_confusion_matrix` to a fixed-threshold evaluation to save bbox and
+segmentation confusion matrices. Rows are actual classes, columns are predicted
+classes, the final background column contains false negatives, and the final
+background row contains false positives. The command saves raw counts and
+actual-class row-normalized versions as CSV, 300-dpi PNG, PDF, and SVG files.
+Matching is class-agnostic at `--match_iou_thresh`, so off-diagonal cells show
+which classes were confused. Crowd annotations are excluded.
+
+```bash
+python evaluate_checkpoint.py \
+  --image_dir /path/to/dataset/test/images \
+  --ann_file /path/to/dataset/test/annotations.json \
+  --checkpoint runs/experiment_name/best_model.pth \
+  --output_dir runs/experiment_name/test_evaluation \
+  --threshold_mode fixed \
+  --score_thresh 0.45 \
+  --match_iou_thresh 0.5 \
+  --save_confusion_matrix
+```
+
 ### Learning-rate scheduling
 
 Training uses SGD with momentum. The default learning rate remains fixed for
