@@ -247,7 +247,13 @@ def evaluate_loss(model, data_loader, device):
 
 # bboxの評価を行う関数．COCOevalを用いてmAPを計算する．
 @torch.no_grad()
-def evaluate_coco_bbox(model, data_loader, device, score_thresh=0.0):
+def evaluate_coco_bbox(
+    model,
+    data_loader,
+    device,
+    score_thresh=0.0,
+    return_coco_eval=False,
+):
     model.eval()
 
     coco_gt = data_loader.dataset.coco
@@ -289,7 +295,7 @@ def evaluate_coco_bbox(model, data_loader, device, score_thresh=0.0):
 
     if len(coco_results) == 0:
         print("No validation detections.")
-        return None
+        return (None, None) if return_coco_eval else None
 
     coco_dt = coco_gt.loadRes(coco_results)
 
@@ -303,7 +309,10 @@ def evaluate_coco_bbox(model, data_loader, device, score_thresh=0.0):
     coco_eval.accumulate()
     coco_eval.summarize()
 
-    return extract_coco_metrics(coco_eval, coco_gt, coco_results)
+    metrics = extract_coco_metrics(coco_eval, coco_gt, coco_results)
+    if return_coco_eval:
+        return metrics, coco_eval
+    return metrics
 
 # segmentationの評価を行う関数．COCOevalを用いてmAPを計算する．
 @torch.no_grad()
@@ -313,6 +322,7 @@ def evaluate_coco_segm(
     device,
     score_thresh=0.0,
     mask_thresh=0.5,
+    return_coco_eval=False,
 ):
     model.eval()
 
@@ -361,7 +371,7 @@ def evaluate_coco_segm(
 
     if len(coco_results) == 0:
         print("No validation mask detections.")
-        return None
+        return (None, None) if return_coco_eval else None
 
     coco_dt = coco_gt.loadRes(coco_results)
 
@@ -374,7 +384,10 @@ def evaluate_coco_segm(
     coco_eval.accumulate()
     coco_eval.summarize()
 
-    return extract_coco_metrics(coco_eval, coco_gt, coco_results)
+    metrics = extract_coco_metrics(coco_eval, coco_gt, coco_results)
+    if return_coco_eval:
+        return metrics, coco_eval
+    return metrics
 
 def get_args():
     parser = argparse.ArgumentParser()#インスタンス(オブジェクト)を作成

@@ -133,8 +133,26 @@ python evaluate_checkpoint.py \
 
 The sweep saves `threshold_metrics.csv` with class-wise and micro/macro
 TP, FP, FN, precision, recall, and F1, plus `threshold_summary.json` containing
-the selected bbox and segmentation thresholds. Freeze the selected validation
-segmentation threshold before evaluating the test set:
+the selected bbox and segmentation thresholds.
+
+Add `--save_coco_pr` to either evaluation command to save COCO-standard
+101-recall-point PR outputs for both bounding boxes and segmentation. The
+command writes overall plots (IoU 0.50:0.95, 0.50, and 0.75), class-wise plots
+averaged over IoU 0.50:0.95, and the underlying values as CSV. Figures are
+saved as 300-dpi PNG, PDF, and SVG files. These curves reuse the accumulated
+COCO evaluation results and do not run additional model inference.
+
+```bash
+python evaluate_checkpoint.py \
+  --image_dir /path/to/dataset/validation/images \
+  --ann_file /path/to/dataset/validation/annotations.json \
+  --checkpoint runs/experiment_name/best_model.pth \
+  --output_dir runs/experiment_name/validation_evaluation \
+  --save_coco_pr
+```
+
+Freeze the selected validation segmentation threshold before evaluating the
+test set:
 
 ```bash
 python evaluate_checkpoint.py \

@@ -15,6 +15,7 @@ from train import (
     print_class_metrics,
 )
 from utils.checkpoint import load_training_checkpoint
+from utils.coco_pr import save_coco_pr_outputs
 from utils.dataset import CocoDiatomDataset
 from utils.metrics_logger import (
     append_class_metrics_csv,
@@ -39,6 +40,14 @@ def get_args():
     parser.add_argument("--device", default=None, help="For example cuda:0 or cpu")
     parser.add_argument("--batch_size", type=int, default=1)
     parser.add_argument("--eval_mask_thresh", type=float, default=0.5)
+    parser.add_argument(
+        "--save_coco_pr",
+        action="store_true",
+        help=(
+            "Save COCO 101-point overall and class-wise PR curves as "
+            "PNG/PDF/SVG plus CSV"
+        ),
+    )
     parser.add_argument(
         "--threshold_mode",
         choices=["none", "sweep", "fixed"],
@@ -122,17 +131,42 @@ def main():
     epoch = int(metadata.get("epoch") or 0)
 
     print("Running COCO bbox evaluation...")
-    bbox_metrics = evaluate_coco_bbox(model, data_loader, device, score_thresh=0.0)
+    bbox_metrics, bbox_coco_eval = evaluate_coco_bbox(
+        model,
+        data_loader,
+        device,
+        score_thresh=0.0,
+        return_coco_eval=True,
+    )
 
     print("Running COCO segm evaluation...")
-    segm_metrics = evaluate_coco_segm(
+    segm_metrics, segm_coco_eval = evaluate_coco_segm(
         model,
         data_loader,
         device,
         score_thresh=0.0,
         mask_thresh=args.eval_mask_thresh,
+        return_coco_eval=True,
     )
     print_class_metrics(bbox_metrics, segm_metrics)
+
+    coco_pr_outputs = None
+    if args.save_coco_pr:
+        print("Saving COCO 101-point precision-recall curves...")
+        coco_pr_outputs = {
+            "bbox": save_coco_pr_outputs(
+                bbox_coco_eval,
+                dataset.category_names,
+                "bbox",
+                args.output_dir,
+            ),
+            "segm": save_coco_pr_outputs(
+                segm_coco_eval,
+                dataset.category_names,
+                "segm",
+                args.output_dir,
+            ),
+        }
 
     threshold_outputs = None
     if args.threshold_mode != "none":
@@ -201,6 +235,7 @@ def main():
                 "epoch": epoch,
                 "bbox": json_ready(bbox_metrics),
                 "segm": json_ready(segm_metrics),
+                "coco_pr": coco_pr_outputs,
                 "threshold_evaluation": threshold_outputs,
             },
             file,
@@ -216,6 +251,15 @@ def main():
     if threshold_outputs is not None:
         print(f"Saved: {threshold_outputs['csv']}")
         print(f"Saved: {threshold_outputs['summary']}")
+    if coco_pr_outputs is not None:
+        for evaluation_type, outputs in coco_pr_outputs.items():
+            if outputs is None:
+                continue
+            print(f"Saved COCO PR outputs ({evaluation_type}):")
+            print(f"  {outputs['csv']}")
+            for group in ("overall", "per_class"):
+                for path in outputs[group].values():
+                    print(f"  {path}")
 
 
 if __name__ == "__main__":
